@@ -7,18 +7,24 @@ profile suggestions — in a web report you can also trigger on demand.
 Designed to run on an always-on Raspberry Pi on the same LAN as the machine. See
 [`SCOPE.md`](./SCOPE.md) for the full architecture and roadmap.
 
-## What it does (Phase 1)
+## What it does
 
 - **Ingest** — downloads new shots (binary `.slog`) from the device and parses
   them into AI-friendly JSON with physics diagnostics (channeling risk,
   puck resistance, temp stability, profile compliance).
 - **Review** — hands the recent-shot window to Claude and stores a structured
   set of suggestions.
-- **Report** — a small read-only web page shows the latest review and recent
-  shots, with a “Run review” button.
+- **Draft** — turns a review's profile suggestions into a complete, validated
+  profile (rewritten from the one the shot ran on), clamped to device-safe
+  bounds, stored as a *pending edit*.
+- **Approve & push** — on your say-so, writes the edit to the machine as a **new
+  `[AI]` profile** over WebSocket (never overwrites your original; you select it
+  on the machine).
+- **Report** — a small web page shows reviews, drafts, and recent shots, with
+  “Run review”, “Draft profile edit”, and “Approve & push” buttons.
 
-Writing adjusted profiles back to the machine (the “draft profile edit” button)
-is Phase 2 — see `SCOPE.md`.
+Grind and dose/yield are suggested as text (manual bench changes); only profile
+changes get drafted/pushed. See `SCOPE.md` for the roadmap.
 
 ## Reuse
 
@@ -41,6 +47,10 @@ Confirm the Pi can reach the machine (`ping gaggimate.local`), then:
 ```bash
 crema ingest              # pull new shots
 crema review              # ingest + run a Claude review, print suggestions
+crema draft [REVIEW_ID]   # draft a profile edit from a review (latest if omitted)
+crema edits               # list drafted / pushed edits
+crema push EDIT_ID        # approve & push an edit to the machine as a new [AI] profile
+crema discard EDIT_ID     # discard a drafted edit
 crema serve               # web report at http://127.0.0.1:8765
 ```
 

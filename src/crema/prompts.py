@@ -66,6 +66,71 @@ class ReviewResult(BaseModel):
     rationale: str = Field(description="The reasoning that ties the telemetry to the recommendation.")
 
 
+DRAFT_SYSTEM_PROMPT = """\
+You edit GaggiMate espresso profiles. You are given the CURRENT profile the machine \
+ran, plus a review's recommended changes. Produce the COMPLETE modified profile that \
+implements the review's profile suggestions and nothing else.
+
+Rules:
+- Return every phase, in order — carry over all phases and fields unchanged except the \
+specific values the review calls for. Do not drop, reorder, or invent phases.
+- Only make changes the review's profile_changes justify. Grind and dose/yield are \
+manual bench changes, NOT profile edits — ignore them here.
+- Stay in safe bounds: water/phase temperature 60–96°C, pump pressure 0–12 bar, flow \
+≥ 0, each phase duration > 0 and ≤ 120s. Phase type is 'preinfusion' or 'brew'.
+- Keep the label the same as the current profile (the system appends an "[AI]" marker \
+on save, so the original is never overwritten).
+- In change_summary, list exactly what you changed vs the current profile, one line each.\
+"""
+
+
+class DraftPump(BaseModel):
+    target: Literal["pressure", "flow"] = Field(description="Whether this phase controls pressure or flow.")
+    pressure: float = Field(description="Target pressure in bar (0–12).")
+    flow: float = Field(description="Target flow in ml/s (>= 0).")
+
+
+class DraftTransition(BaseModel):
+    type: Literal["linear", "ease-out", "ease-in", "instant"] = Field(description="Ramp shape into this phase.")
+    duration: float = Field(description="Transition duration in seconds (>= 0).")
+
+
+class DraftTarget(BaseModel):
+    type: Literal["pressure", "flow", "volumetric", "pumped"] = Field(description="Stop-condition metric.")
+    operator: Literal["gte", "lte"] = Field(description="gte = >=, lte = <=.")
+    value: float = Field(description="Threshold value.")
+
+
+class DraftPhase(BaseModel):
+    name: str = Field(description="Phase name, e.g. 'Preinfusion', 'Extraction'.")
+    phase: Literal["preinfusion", "brew"] = Field(description="Phase type.")
+    duration: float = Field(description="Phase duration in seconds (0 < d <= 120).")
+    temperature: Optional[float] = Field(default=None, description="Phase temperature in °C (60–96), or null.")
+    pump: DraftPump
+    transition: Optional[DraftTransition] = Field(default=None)
+    targets: list[DraftTarget] = Field(default_factory=list, description="Stop conditions (phase ends when ANY is met).")
+
+
+class DraftedProfile(BaseModel):
+    """The complete modified profile Claude returns for a drafted edit."""
+
+    label: str = Field(description="Profile label (keep the same as the current profile).")
+    temperature: float = Field(description="Global target water temperature in °C (60–96).")
+    change_summary: str = Field(description="What changed vs the current profile, one line per change.")
+    phases: list[DraftPhase] = Field(description="Every phase of the profile, in order.")
+
+
+def build_draft_message(base_profile: dict[str, Any], review: dict[str, Any]) -> str:
+    """Render the current profile + review suggestions into the drafting user turn."""
+    return (
+        "CURRENT PROFILE (the machine ran this):\n"
+        + json.dumps(base_profile, indent=2, default=str)
+        + "\n\nREVIEW SUGGESTIONS to implement (profile_changes only):\n"
+        + json.dumps(review["suggestions"], indent=2, default=str)
+        + "\n\nReturn the complete modified profile."
+    )
+
+
 def build_user_message(shots: list[dict[str, Any]]) -> str:
     """Render the recent-shots context into the user turn.
 
