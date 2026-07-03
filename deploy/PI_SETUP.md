@@ -8,13 +8,26 @@ port-forward.
 Assumes the project lives at `/home/pi/crema` and the user is `pi`. Adjust paths
 in the three `deploy/*.service` / `*.timer` files if yours differ.
 
-## 1. Copy the project to the Pi
+## 1. Get the project onto the Pi
 
-From your Mac (in `/Users/Alex/Documents/Coffee`):
+Clone from GitHub (the repo is private, so authenticate once). Easiest is the
+GitHub CLI:
 
 ```bash
-rsync -av --exclude .venv --exclude '*.db' --exclude .env ./ pi@<pi-host>:/home/pi/crema/
+ssh pi@<pi-host>
+sudo apt install -y gh git        # if not already present
+gh auth login                     # follow prompts (HTTPS, paste a token or use the browser code)
+gh repo clone waevans10/crema ~/crema
 ```
+
+Or with plain git + a personal access token:
+
+```bash
+git clone https://github.com/waevans10/crema.git ~/crema
+```
+
+`.env`, `.venv`, and the database are gitignored — you create them on the Pi in
+the next steps.
 
 ## 2. Install uv and a pinned Python 3.13
 
@@ -78,7 +91,8 @@ ssh -L 8765:localhost:8765 pi@<pi-host>
 
 ## Updating later
 
+Push changes from your Mac (`git push`), then on the Pi:
+
 ```bash
-rsync -av --exclude .venv --exclude '*.db' --exclude .env ./ pi@<pi-host>:/home/pi/crema/
-ssh pi@<pi-host> 'cd ~/crema && uv sync && sudo systemctl restart crema-web.service'
+ssh pi@<pi-host> 'cd ~/crema && git pull && uv sync && sudo systemctl restart crema-web.service'
 ```
