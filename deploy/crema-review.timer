@@ -1,0 +1,11 @@
+[Unit]
+Description=Run crema review periodically
+
+[Timer]
+# Every 15 minutes, and ~2 min after boot. Adjust to taste.
+OnBootSec=2min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

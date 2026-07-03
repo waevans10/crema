@@ -1,0 +1,16 @@
+[Unit]
+Description=crema web report (loopback; view via SSH port-forward)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust User and the two paths to match your Pi.
+User=pi
+WorkingDirectory=/home/pi/crema
+ExecStart=/home/pi/crema/.venv/bin/crema serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

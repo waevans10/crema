@@ -1,0 +1,10 @@
+[Unit]
+Description=crema shot review (ingest new shots + Claude review)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+WorkingDirectory=/home/pi/crema
+ExecStart=/home/pi/crema/.venv/bin/crema review
