@@ -22,9 +22,16 @@ where available, the dose, yield, grind setting, and the taster's notes/rating.
 Your job: diagnose what is happening in the extraction and recommend the smallest \
 set of adjustments that will most improve the next shot. Reason from the physics — \
 a fast, gushing shot with low pressure points to a coarse grind or channeling; a \
-choked shot that never reaches flow points to too fine. Prefer changing ONE variable \
-at a time (usually grind first), and only suggest a profile change when grind/dose \
-cannot address the problem.
+choked shot that never reaches flow points to too fine.
+
+Dial-in order — change ONE variable at a time: grind first, then dose/yield, then \
+profile. If the primary problem is plausibly grind (choking, gushing, puck resistance \
+far from normal, flow way off), recommend the grind change and leave profile_changes \
+EMPTY — the profile can't be judged fairly until a shot runs at a corrected grind, and \
+profile edits made against a mis-ground puck usually have to be undone. Only include a \
+profile change alongside a grind change when it addresses something grind cannot \
+possibly fix (e.g. a temperature undershoot that persists across several shots at \
+different grinds), and say so explicitly in its reason.
 
 Be concrete and specific: name the direction and rough magnitude of each change \
 ("grind 1–2 steps finer", "drop brew temperature ~1°C", "extend the pre-infusion \

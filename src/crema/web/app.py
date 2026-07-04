@@ -276,9 +276,13 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
             for c in changes
         ) + "</ul>"
     else:
-        changes_html = "<p class='muted'>No profile changes suggested.</p>"
+        changes_html = (
+            "<p class='muted'>No profile changes suggested — dial in the bench changes "
+            "above first, then review the next shot.</p>"
+        )
     reviewed_at = _fmt_ts(review.get("created_at"))
     when = f" · reviewed {html.escape(reviewed_at)}" if reviewed_at else ""
+    draft_form = _draft_form(review["id"], profiles) if changes else ""
     return f"""<div class="card">
       <div class="review-top">
         {_score_badge(s.get('score'))}
@@ -298,7 +302,7 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
       <p class="muted" style="margin:.5rem 0 0">{html.escape(s.get('rationale', ''))}</p>
       <p class="muted" style="font-size:.85rem;margin:.4rem 0 0">
         shot {html.escape(review['shot_id'])}{when} · {html.escape(review['model'])}</p>
-      {_draft_form(review['id'], profiles)}
+      {draft_form}
     </div>"""
 
 
