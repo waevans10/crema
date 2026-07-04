@@ -305,8 +305,16 @@ def _render_shots(shots: list[dict[str, Any]]) -> str:
 # --------------------------------------------------------------------------- #
 
 
+_CONN_HINTS = (
+    "connect call failed", "cannot connect", "no route to host", "device_unreachable",
+    "name or service not known", "timed out", "timeout", "connection refused",
+)
+
+
 def _redirect_error(exc: Exception) -> RedirectResponse:
     msg = str(exc) or exc.__class__.__name__
+    if any(h in msg.lower() for h in _CONN_HINTS):
+        msg = "Can't reach the GaggiMate — it looks powered off or unreachable on the network."
     return RedirectResponse(f"/?error={quote(msg[:300])}", status_code=303)
 
 
