@@ -33,6 +33,10 @@ async def ingest_new_shots(conn: aiosqlite.Connection, config: CremaConfig, limi
     index = await client.list_recent_shots(limit=limit)
     known = await db.known_shot_ids(conn)
 
+    # Stamp new shots with the beans currently in the hopper (the coffee
+    # setting), so a bean change later doesn't rewrite these shots' history.
+    coffee = (await db.get_setting(conn, "coffee")) or config.coffee or None
+
     new_ids: list[str] = []
     profile_ids: set[str] = set()
     for meta in index:
@@ -49,6 +53,7 @@ async def ingest_new_shots(conn: aiosqlite.Connection, config: CremaConfig, limi
             shot_id=transformed["shot_id"],
             transformed=dict(transformed),
             captured_at=float(captured_at) if captured_at is not None else None,
+            coffee=coffee,
         )
         new_ids.append(transformed["shot_id"])
         pid = transformed.get("profile_id")

@@ -498,9 +498,13 @@ def _render_shots(shots: list[dict[str, Any]]) -> str:
     for sh in shots:
         t = sh["transformed"]
         notes = sh.get("tasting_notes") or ""
-        notes_summary = (
-            f"Tasting notes: {html.escape(notes)}" if notes else "Add tasting notes (how it tasted)"
-        )
+        shot_coffee = sh.get("coffee") or ""
+        summary_bits = []
+        if shot_coffee:
+            summary_bits.append(f"Beans: {html.escape(shot_coffee)}")
+        if notes:
+            summary_bits.append(f"Tasting notes: {html.escape(notes)}")
+        summary = " · ".join(summary_bits) or "Add beans / tasting notes for this shot"
         rows.append(
             f"""<div class="card shot">
               <span class="meta"><b>Shot {html.escape(sh['id'])}</b>
@@ -512,10 +516,14 @@ def _render_shots(shots: list[dict[str, Any]]) -> str:
                 <input type="hidden" name="shot_id" value="{html.escape(sh['id'])}">
                 <button class="btn btn-sm btn-ghost" type="submit">Review this shot</button>
               </form>
-              <details class="sub"><summary>{notes_summary}</summary>
+              <details class="sub"><summary>{summary}</summary>
                 <form method="post" action="/shots/{html.escape(sh['id'])}/tasting-notes">
+                  <input name="coffee" type="text" value="{html.escape(shot_coffee)}"
+                    placeholder="Beans this shot was pulled with (blank = the session coffee)"
+                    style="margin-top:.4rem;width:100%;font:inherit;color:var(--text);background:var(--surface-2);
+                    border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
                   <textarea name="notes" rows="2" style="margin-top:.4rem" placeholder="e.g. sour and thin — goes into the next review as taste feedback">{html.escape(notes)}</textarea>
-                  <button class="btn btn-sm btn-ghost" type="submit">Save tasting notes</button>
+                  <button class="btn btn-sm btn-ghost" type="submit">Save</button>
                 </form>
               </details>
             </div>"""
@@ -768,19 +776,23 @@ async def run_analyze(shot_id: str = Form(...)) -> RedirectResponse:
 
 
 @app.post("/shots/{shot_id}/tasting-notes")
-async def save_tasting_notes(shot_id: str, notes: str = Form("")) -> RedirectResponse:
-    """Save the barista's tasting notes on a shot; future reviews see them as taste feedback."""
+async def save_tasting_notes(
+    shot_id: str, notes: str = Form(""), coffee: str = Form("")
+) -> RedirectResponse:
+    """Save the barista's tasting notes and/or beans on a shot for future reviews."""
     conn = await db.connect(_cfg.db_path)
     try:
         found = await db.set_shot_tasting_notes(conn, shot_id, notes.strip()[:500] or None)
+        if found:
+            await db.set_shot_coffee(conn, shot_id, coffee.strip()[:300] or None)
     finally:
         await conn.close()
     if not found:
         return RedirectResponse("/?error=" + quote(f"Shot {shot_id} not found."), status_code=303)
     msg = (
-        f"Tasting notes saved for shot {shot_id} — the next review will take them into account."
-        if notes.strip()
-        else f"Tasting notes cleared for shot {shot_id}."
+        f"Shot {shot_id} updated — the next review will take it into account."
+        if notes.strip() or coffee.strip()
+        else f"Beans and tasting notes cleared for shot {shot_id}."
     )
     return RedirectResponse("/?note=" + quote(msg), status_code=303)
 

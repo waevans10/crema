@@ -18,10 +18,12 @@ Each shot is provided as JSON with per-phase diagnostics: temperature stability,
 pressure and flow curves, extraction timing, puck-resistance estimates, and a \
 channeling-risk assessment. You are also given the profile the shot ran on and, \
 where available, the dose, yield, grind setting, and the taster's notes/rating. \
-If a COFFEE is described (bean, roast level, roast date), factor it in: lighter \
-roasts tolerate finer grinds and higher temperatures; darker roasts extract fast \
-and bitter, favouring coarser grinds and lower temperatures; very fresh or stale \
-beans shift flow behaviour.
+If a COFFEE is described (bean, roast level, roast date) — for the session or for \
+a specific shot — factor it in: lighter roasts tolerate finer grinds and higher \
+temperatures; darker roasts extract fast and bitter, favouring coarser grinds and \
+lower temperatures; very fresh or stale beans shift flow behaviour. When the \
+beans CHANGED between shots, expect a step change in flow/resistance and do not \
+attribute it to earlier adjustments.
 
 Older shots may be followed by the REVIEW you gave after that shot. Use these to \
 track the dial-in trajectory: check whether your earlier advice moved the next \
@@ -225,6 +227,9 @@ def build_user_message(
     `grinder` is the barista's free-text description of their grinder, so grind
     advice can be given in that grinder's own steps/clicks/numbers.
     `coffee` describes the beans (roast level, roast date) so advice fits them.
+    Shots may also carry their own `coffee` (stamped at ingest / edited later);
+    a per-shot line is emitted when it differs from the session coffee, so a
+    bean change mid-window is visible.
     `prior_reviews` maps shot id → that review's suggestions, letting Claude see
     what it advised after each older shot and whether the advice worked.
     """
@@ -242,6 +247,8 @@ def build_user_message(
         label = "most recent" if idx == 0 else f"{idx} shot(s) earlier"
         lines.append(f"=== Shot {shot['id']} ({label}) ===")
         lines.append(json.dumps(shot["transformed"], indent=2, default=str))
+        if shot.get("coffee") and shot["coffee"] != coffee:
+            lines.append(f"COFFEE (this shot): {shot['coffee']}")
         if shot.get("tasting_notes"):
             lines.append(f"TASTING NOTES (from the barista, on this shot): {shot['tasting_notes']}")
         if prior_reviews and idx > 0 and shot["id"] in prior_reviews:

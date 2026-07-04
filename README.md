@@ -201,7 +201,7 @@ crema discard EDIT_ID     # discard a drafted edit
 crema autoreview [on|off] # toggle automatic review of new shots by the timer
 crema grinder ["DESC"]    # describe your grinder so grind advice uses its steps/clicks
 crema coffee ["DESC"]     # describe the beans in the hopper so advice fits them
-crema taste SHOT_ID "..." # record how a shot tasted; the next review weighs it
+crema taste SHOT_ID "..." # record how a shot tasted (--beans to set that shot's coffee)
 crema serve               # web report at http://127.0.0.1:8765
 ```
 
@@ -261,7 +261,9 @@ context supplies the depth. Each review is **grounded** in:
   resistance, channeling risk, temperature stability), newest first
 - **your grinder**, so grind advice comes back in its own steps/clicks
 - **your coffee** (roast level, roast date), so a light Ethiopian and a dark
-  blend get different advice
+  blend get different advice — new shots are stamped with the beans in the
+  hopper at ingest, and each shot's beans can be edited individually, so a
+  bean change mid-window stays accurate
 - **your tasting notes** per shot — telemetry can't taste sourness; you can
 - **its own previous advice**, interleaved with the shots that followed — so it
   can see whether "2 steps finer" worked, build on what did, and change strategy

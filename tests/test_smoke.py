@@ -128,6 +128,20 @@ def test_build_user_message_includes_coffee_when_set():
     assert "COFFEE" not in build_user_message(shots)
 
 
+def test_build_user_message_per_shot_coffee_only_when_it_differs():
+    shots = [
+        {"id": "a", "transformed": {}, "coffee": "dark blend"},   # differs → shown
+        {"id": "b", "transformed": {}, "coffee": "light roast"},  # same as session → omitted
+        {"id": "c", "transformed": {}},                            # none → omitted
+    ]
+    msg = build_user_message(shots, coffee="light roast")
+    assert "COFFEE (this shot): dark blend" in msg
+    assert msg.count("COFFEE (this shot)") == 1
+    # Without a session coffee, any per-shot coffee is shown.
+    msg = build_user_message(shots)
+    assert msg.count("COFFEE (this shot)") == 2
+
+
 def test_build_user_message_interleaves_prior_reviews_for_older_shots_only():
     shots = [
         {"id": "shot-new", "transformed": {}},
@@ -213,6 +227,30 @@ def test_latest_reviews_for_shots_returns_latest_per_shot(tmp_path):
             assert out["000001"]["diagnosis"] == "second"
             assert "000002" not in out
             assert await crema_db.latest_reviews_for_shots(conn, []) == {}
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_shot_coffee_stamped_on_insert_and_preserved_on_reingest(tmp_path):
+    """Ingest stamps beans on first insert; a re-ingest never overwrites them."""
+
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            await crema_db.upsert_shot(conn, "000001", {"time": 28.0}, coffee="light roast")
+            shot = await crema_db.get_shot(conn, "000001")
+            assert shot is not None and shot["coffee"] == "light roast"
+            # Re-ingest with different beans in the hopper → original stamp kept.
+            await crema_db.upsert_shot(conn, "000001", {"time": 29.0}, coffee="dark blend")
+            shot = await crema_db.get_shot(conn, "000001")
+            assert shot is not None and shot["coffee"] == "light roast"
+            assert shot["transformed"]["time"] == 29.0  # telemetry still refreshed
+            # Barista edit wins; clearing works.
+            assert await crema_db.set_shot_coffee(conn, "000001", "decaf test")
+            shot = await crema_db.get_shot(conn, "000001")
+            assert shot is not None and shot["coffee"] == "decaf test"
         finally:
             await conn.close()
 

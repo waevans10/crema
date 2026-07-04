@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS shots (
     captured_at   REAL,                   -- unix seconds if known, else NULL
     transformed   TEXT NOT NULL,          -- AI-friendly JSON (transform_shot_for_ai output)
     tasting_notes TEXT,                   -- barista's taste feedback, fed into future reviews
+    coffee        TEXT,                   -- beans this shot was pulled with (stamped at ingest, editable)
     created_at    REAL NOT NULL DEFAULT (unixepoch('now'))
 );
 
@@ -102,6 +103,10 @@ async def _migrate(db: aiosqlite.Connection) -> None:
     if "tasting_notes" not in shot_cols:
         # Barista's taste feedback on a shot, included in future review context.
         await db.execute("ALTER TABLE shots ADD COLUMN tasting_notes TEXT")
+    if "coffee" not in shot_cols:
+        # Beans the shot was pulled with — stamped from the coffee setting at
+        # ingest, editable per shot, so a bean change mid-window stays accurate.
+        await db.execute("ALTER TABLE shots ADD COLUMN coffee TEXT")
 
 
 async def upsert_profile(
@@ -177,13 +182,18 @@ async def upsert_shot(
     shot_id: str,
     transformed: dict[str, Any],
     captured_at: Optional[float] = None,
+    coffee: Optional[str] = None,
 ) -> None:
-    """Insert or replace a shot's AI-friendly JSON."""
+    """Insert or replace a shot's AI-friendly JSON.
+
+    `coffee` (the beans at ingest time) is only set on first insert — a
+    re-ingest never overwrites a coffee the barista may have edited.
+    """
     await db.execute(
-        "INSERT INTO shots (id, captured_at, transformed) VALUES (?, ?, ?) "
+        "INSERT INTO shots (id, captured_at, transformed, coffee) VALUES (?, ?, ?, ?) "
         "ON CONFLICT(id) DO UPDATE SET transformed=excluded.transformed, "
         "captured_at=excluded.captured_at",
-        (shot_id, captured_at, json.dumps(transformed)),
+        (shot_id, captured_at, json.dumps(transformed), coffee or None),
     )
     await db.commit()
 
@@ -194,7 +204,7 @@ async def recent_shots(db: aiosqlite.Connection, limit: int) -> list[dict[str, A
     Ordered by captured_at when present, falling back to insertion order.
     """
     async with db.execute(
-        "SELECT id, captured_at, transformed, tasting_notes FROM shots "
+        "SELECT id, captured_at, transformed, tasting_notes, coffee FROM shots "
         "ORDER BY COALESCE(captured_at, created_at) DESC, rowid DESC LIMIT ?",
         (limit,),
     ) as cur:
@@ -208,16 +218,31 @@ def _shot_row(row: aiosqlite.Row) -> dict[str, Any]:
         "captured_at": row["captured_at"],
         "transformed": json.loads(row["transformed"]),
         "tasting_notes": row["tasting_notes"],
+        "coffee": row["coffee"],
     }
 
 
 async def get_shot(db: aiosqlite.Connection, shot_id: str) -> Optional[dict[str, Any]]:
     """Return a single shot's stored data by id, or None."""
     async with db.execute(
-        "SELECT id, captured_at, transformed, tasting_notes FROM shots WHERE id = ?", (shot_id,)
+        "SELECT id, captured_at, transformed, tasting_notes, coffee FROM shots WHERE id = ?",
+        (shot_id,),
     ) as cur:
         row = await cur.fetchone()
     return _shot_row(row) if row else None
+
+
+async def set_shot_coffee(db: aiosqlite.Connection, shot_id: str, coffee: Optional[str]) -> bool:
+    """Save (or clear, with None/empty) which beans a shot was pulled with.
+
+    Returns False when the shot id doesn't exist.
+    """
+    cur = await db.execute(
+        "UPDATE shots SET coffee = ? WHERE id = ?",
+        (coffee or None, shot_id),
+    )
+    await db.commit()
+    return bool(cur.rowcount)
 
 
 async def set_shot_tasting_notes(

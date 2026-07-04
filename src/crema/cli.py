@@ -185,31 +185,32 @@ def taste(
     notes: Optional[str] = typer.Argument(
         None, help='How it tasted (omit to show the current notes). Pass "" to clear.'
     ),
+    beans: Optional[str] = typer.Option(
+        None, "--beans", help='Beans this shot was pulled with (overrides the ingest stamp). Pass "" to clear.'
+    ),
 ) -> None:
-    """Record how a shot tasted; future reviews weigh it alongside the telemetry."""
+    """Record how a shot tasted (and which beans); future reviews weigh it alongside the telemetry."""
 
     async def _run() -> None:
         cfg = _config()
         conn = await db.connect(cfg.db_path)
         sid = shot_id.zfill(6)
         try:
-            if notes is None:
-                shot = await db.get_shot(conn, sid)
-                if shot is None:
-                    typer.echo(f"Shot {sid} not found — run `crema ingest` first.")
-                    return
-                current = shot.get("tasting_notes")
-                typer.echo(f"Shot {sid} tasting notes: {current}" if current else f"No tasting notes on shot {sid}.")
-                return
-            found = await db.set_shot_tasting_notes(conn, sid, notes.strip()[:500] or None)
-            if not found:
+            shot = await db.get_shot(conn, sid)
+            if shot is None:
                 typer.echo(f"Shot {sid} not found — run `crema ingest` first.")
                 return
-            typer.echo(
-                f"Tasting notes saved for shot {sid} — the next review will take them into account."
-                if notes.strip()
-                else f"Tasting notes cleared for shot {sid}."
-            )
+            if notes is None and beans is None:
+                current = shot.get("tasting_notes")
+                typer.echo(f"Shot {sid} tasting notes: {current}" if current else f"No tasting notes on shot {sid}.")
+                if shot.get("coffee"):
+                    typer.echo(f"Shot {sid} beans: {shot['coffee']}")
+                return
+            if notes is not None:
+                await db.set_shot_tasting_notes(conn, sid, notes.strip()[:500] or None)
+            if beans is not None:
+                await db.set_shot_coffee(conn, sid, beans.strip()[:300] or None)
+            typer.echo(f"Shot {sid} updated — the next review will take it into account.")
         finally:
             await conn.close()
 
