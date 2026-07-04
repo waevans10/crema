@@ -31,7 +31,7 @@ _Add a screenshot of the web report here — see [`docs/SCREENSHOTS.md`](docs/SC
   machine.
 - **Python 3.13+** on that computer.
 - A **paid Anthropic API account** for Claude — this is what does the reviewing
-  (see [Which LLM](#which-llm)). **This costs real money: you pay Anthropic
+  (see [The AI (Claude)](#the-ai-claude)). **This costs real money: you pay Anthropic
   directly, per shot reviewed.** It's cheap for home use (roughly a dollar or two
   a month), but it is a metered bill, not a free service — read [Cost](#cost)
   before you set this up.
@@ -184,54 +184,21 @@ your normal user, not with `sudo`). For the full walkthrough, including how to
 view the report from your laptop over SSH, see
 [`deploy/PI_SETUP.md`](deploy/PI_SETUP.md).
 
-## Which LLM
+## The AI (Claude)
 
-crema is built on the **Anthropic SDK** and uses **Claude** by default — it's the
-recommended choice and what the project is tuned and tested against. Two things
-depend on Claude specifically:
+crema uses **Claude** (via the Anthropic SDK) to review shots and draft profiles.
+Two things it relies on:
 
 - **Structured output** — reviews and drafts come back as validated JSON via
   Claude's `messages.parse`, so the app can render and act on them safely.
-- **Reasoning quality on the physics** — diagnosing an extraction from
-  temperature/pressure/flow curves is exactly the kind of task the recommended
-  models are strong at. Routine reviews run on the cheaper `claude-sonnet-5`;
-  the occasional profile draft uses the stronger `claude-opus-4-8`.
+- **Reasoning on the physics** — diagnosing an extraction from
+  temperature/pressure/flow curves is exactly what these models are good at.
 
-**Prefer a different model?** The model IDs are just `.env` settings
-(`CREMA_REVIEW_MODEL`, `CREMA_DRAFT_MODEL`), so you can point them at any current
-Claude model. Swapping to a *non-Claude* provider is a small code change rather
-than a config toggle: the two API calls live in
-[`src/crema/review.py`](src/crema/review.py) and
-[`src/crema/draft.py`](src/crema/draft.py) — both use the Anthropic client with a
-Pydantic-typed structured response. Replace those two calls with your provider's
-structured-output equivalent and the rest of crema is unchanged.
-
-### Running it for free (lower quality)
-
-There's no free Claude tier — the Anthropic API is paid. If you want **zero API
-cost**, the only route is to point those two calls at a free model instead, and
-accept that the reviews get less sharp. This is a DIY code change (crema ships
-Claude-only), but the seam is small and lives entirely in `review.py` and
-`draft.py`. Two options:
-
-- **Local model with [Ollama](https://ollama.com/)** — run a small open model
-  (e.g. Llama 3.x 8B, Qwen 2.5 7B) on the same box. Truly free and fully private
-  (nothing leaves your network). Caveats: it needs a **64-bit machine with a few
-  GB of RAM** — a mini PC, spare laptop, a Mac, or a Pi 5 (8GB+); the small
-  32-bit Pi this was built on **can't** run it. And quality drops most exactly
-  where it matters — reasoning about the extraction physics and reliably
-  producing valid profile JSON.
-- **A free hosted tier** such as **Google Gemini (Flash)** or **[Groq](https://groq.com/)** —
-  both have genuine free tiers (with rate limits) and support structured JSON
-  output. Better reasoning than a small local model and no hardware needed, but
-  your shot telemetry goes to that provider, and free limits can throttle or
-  change — check each provider's current terms.
-
-In both cases you keep the same Pydantic result shapes (`ReviewResult`,
-`DraftedProfile` in [`src/crema/prompts.py`](src/crema/prompts.py)) — you're only
-changing which client produces them. Expect vaguer diagnoses and the occasional
-malformed draft on the cheapest models; the paid Claude default is what the
-prompts are tuned and tested against.
+Two models are used, both set in `.env`: routine reviews run on the cheaper
+`CREMA_REVIEW_MODEL` (default `claude-sonnet-5`), and the occasional profile draft
+uses the stronger `CREMA_DRAFT_MODEL` (default `claude-opus-4-8`). Point either at
+a different Claude model if you like — e.g. set both to `claude-sonnet-5` to keep
+costs down.
 
 ## Configuration
 
