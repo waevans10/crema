@@ -10,7 +10,7 @@ from __future__ import annotations
 import html
 import secrets
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -163,8 +163,25 @@ def _render_edits(edits: list[dict[str, Any]]) -> str:
     return "".join(out)
 
 
+def _redirect_error(exc: Exception) -> RedirectResponse:
+    """Send the user back to the report with a readable error banner."""
+    msg = str(exc) or exc.__class__.__name__
+    return RedirectResponse(f"/?error={quote(msg[:300])}", status_code=303)
+
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception) -> HTMLResponse:
+    """Catch-all so an unexpected failure renders a page, not a bare 500."""
+    body = (
+        "<h1>crema ☕</h1>"
+        f"<div class='card' style='color:#c62828'>Something went wrong: {html.escape(str(exc))}</div>"
+        "<p><a href='/'>← back to the report</a></p>"
+    )
+    return HTMLResponse(_page(body), status_code=500)
+
+
 @app.get("/", response_class=HTMLResponse)
-async def index() -> str:
+async def index(error: Optional[str] = None) -> str:
     conn = await db.connect(_cfg.db_path)
     try:
         review = await db.latest_review(conn)
@@ -172,6 +189,9 @@ async def index() -> str:
         edits = await db.list_pending_edits(conn, limit=10)
     finally:
         await conn.close()
+    banner = (
+        f"<div class='card' style='color:#c62828'>{html.escape(error)}</div>" if error else ""
+    )
     shots_html = "".join(
         f"<div class='card'><span class='k'>Shot {html.escape(sh['id'])}</span> · "
         f"profile {html.escape(str(sh['transformed'].get('profile_name', '—')))} · "
@@ -180,7 +200,7 @@ async def index() -> str:
         for sh in shots
     ) or "<div class='card muted'>No shots ingested yet.</div>"
     body = f"""
-      <h1>crema ☕</h1>
+      <h1>crema ☕</h1>{banner}
       <form method="post" action="/review"><button type="submit">Run review</button></form>
       <h2>Latest review</h2>{_render_review(review)}
       <h2>Profile edits</h2>{_render_edits(edits)}
@@ -195,6 +215,8 @@ async def run_review() -> RedirectResponse:
     try:
         await ingest_new_shots(conn, _cfg)
         await review_recent(conn, _cfg)
+    except Exception as e:  # noqa: BLE001 — surface to the user, don't 500
+        return _redirect_error(e)
     finally:
         await conn.close()
     return RedirectResponse("/", status_code=303)
@@ -205,6 +227,8 @@ async def run_draft(review_id: int = Form(...)) -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
         await draft_from_review(conn, _cfg, review_id)
+    except Exception as e:  # noqa: BLE001
+        return _redirect_error(e)
     finally:
         await conn.close()
     return RedirectResponse("/", status_code=303)
@@ -215,6 +239,8 @@ async def approve_edit(edit_id: int) -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
         await push_edit(conn, _cfg, edit_id)
+    except Exception as e:  # noqa: BLE001
+        return _redirect_error(e)
     finally:
         await conn.close()
     return RedirectResponse("/", status_code=303)
@@ -225,6 +251,8 @@ async def reject_edit(edit_id: int) -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
         await discard_edit(conn, edit_id)
+    except Exception as e:  # noqa: BLE001
+        return _redirect_error(e)
     finally:
         await conn.close()
     return RedirectResponse("/", status_code=303)
