@@ -199,6 +199,9 @@ crema edits               # list drafted / pushed edits
 crema push EDIT_ID        # approve & push an edit to the machine as a new [AI] profile
 crema discard EDIT_ID     # discard a drafted edit
 crema autoreview [on|off] # toggle automatic review of new shots by the timer
+crema grinder ["DESC"]    # describe your grinder so grind advice uses its steps/clicks
+crema coffee ["DESC"]     # describe the beans in the hopper so advice fits them
+crema taste SHOT_ID "..." # record how a shot tasted; the next review weighs it
 crema serve               # web report at http://127.0.0.1:8765
 ```
 
@@ -233,6 +236,44 @@ Two models are used, both set in `.env`: routine reviews run on the cheaper
 uses the stronger `CREMA_DRAFT_MODEL` (default `claude-opus-4-8`). Point either at
 a different Claude model if you like — e.g. set both to `claude-sonnet-5` to keep
 costs down.
+
+### Why an LLM and not a trained model?
+
+A fair question — "why not train a model on the shot data?" comes up, so here's
+the reasoning.
+
+A model trained from scratch on one machine's shots would be **siloed**: it
+learns *your* machine's quirks entangled with *your* beans and *your* palate,
+and can't tell them apart from general extraction physics. Change the bean, the
+grinder, or the user, and it's confidently wrong. Making it generalize would
+need coverage of the whole space — many machines × grinders × beans × palates —
+and home espresso produces a few shots a day. That dataset never happens at
+hobby scale.
+
+An LLM with **no** context has the opposite problem: broad extraction knowledge,
+zero idea what's in your portafilter — generic advice.
+
+crema takes the hybrid: the LLM supplies the breadth (it has effectively already
+absorbed the collective dial-in experience of the espresso world), and the
+context supplies the depth. Each review is **grounded** in:
+
+- the full telemetry of your recent shots (pressure/flow curves, puck
+  resistance, channeling risk, temperature stability), newest first
+- **your grinder**, so grind advice comes back in its own steps/clicks
+- **your coffee** (roast level, roast date), so a light Ethiopian and a dark
+  blend get different advice
+- **your tasting notes** per shot — telemetry can't taste sourness; you can
+- **its own previous advice**, interleaved with the shots that followed — so it
+  can see whether "2 steps finer" worked, build on what did, and change strategy
+  on what didn't instead of repeating it
+
+That last one matters: the advice→outcome loop is what training would have
+bought, obtained instead by showing the model its own track record. You get
+specificity *and* generality; a from-scratch model forces you to pick one.
+
+(Where a trained model *does* win — millions of labeled examples, a fixed
+distribution, a numeric output — is the opposite of this regime: tiny data,
+huge variance across setups, and advice as the output.)
 
 ## Configuration
 

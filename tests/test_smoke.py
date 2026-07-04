@@ -122,6 +122,29 @@ def test_build_user_message_includes_grinder_when_set():
     assert "GRINDER" not in build_user_message(shots)
 
 
+def test_build_user_message_includes_coffee_when_set():
+    shots = [{"id": "1", "transformed": {}}]
+    assert "COFFEE: light roast" in build_user_message(shots, coffee="light roast")
+    assert "COFFEE" not in build_user_message(shots)
+
+
+def test_build_user_message_interleaves_prior_reviews_for_older_shots_only():
+    shots = [
+        {"id": "shot-new", "transformed": {}},
+        {"id": "shot-old", "transformed": {}},
+    ]
+    prior = {
+        # Even if the newest shot has a past review, it must NOT be shown
+        # (avoids anchoring the new review on the old opinion of the same shot).
+        "shot-new": {"diagnosis": "should not appear", "grind_change": "none"},
+        "shot-old": {"score": 4, "diagnosis": "gushing", "grind_change": "2 steps finer"},
+    }
+    msg = build_user_message(shots, prior_reviews=prior)
+    assert "REVIEW GIVEN AFTER THIS SHOT" in msg
+    assert "2 steps finer" in msg and "scored it 4/10" in msg
+    assert "should not appear" not in msg
+
+
 def test_fmt_qty_handles_missing_values():
     assert _fmt_qty(44.2, "s") == "44.2s"
     assert _fmt_qty(None, "g") == "—"  # the old code rendered "Noneg"
@@ -171,6 +194,25 @@ def test_tasting_notes_round_trip_and_migration(tmp_path):
             shot = await crema_db.get_shot(conn, "000001")
             assert shot is not None and shot["tasting_notes"] is None
             assert not await crema_db.set_shot_tasting_notes(conn, "999999", "nope")
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_latest_reviews_for_shots_returns_latest_per_shot(tmp_path):
+    """Two reviews on one shot → the later one wins; unknown ids are absent."""
+
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            await crema_db.upsert_shot(conn, "000001", {"time": 28.0})
+            await crema_db.insert_review(conn, "000001", "m", {"diagnosis": "first"})
+            await crema_db.insert_review(conn, "000001", "m", {"diagnosis": "second"})
+            out = await crema_db.latest_reviews_for_shots(conn, ["000001", "000002"])
+            assert out["000001"]["diagnosis"] == "second"
+            assert "000002" not in out
+            assert await crema_db.latest_reviews_for_shots(conn, []) == {}
         finally:
             await conn.close()
 

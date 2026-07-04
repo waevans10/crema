@@ -17,7 +17,17 @@ You are an expert espresso barista reviewing shot telemetry from a GaggiMate-con
 Each shot is provided as JSON with per-phase diagnostics: temperature stability, \
 pressure and flow curves, extraction timing, puck-resistance estimates, and a \
 channeling-risk assessment. You are also given the profile the shot ran on and, \
-where available, the dose, yield, grind setting, and the taster's notes/rating.
+where available, the dose, yield, grind setting, and the taster's notes/rating. \
+If a COFFEE is described (bean, roast level, roast date), factor it in: lighter \
+roasts tolerate finer grinds and higher temperatures; darker roasts extract fast \
+and bitter, favouring coarser grinds and lower temperatures; very fresh or stale \
+beans shift flow behaviour.
+
+Older shots may be followed by the REVIEW you gave after that shot. Use these to \
+track the dial-in trajectory: check whether your earlier advice moved the next \
+shot in the right direction, build on advice that worked, and do NOT repeat \
+advice that has already been tried and failed — change strategy instead, and say \
+what you are doing differently and why.
 
 Your job: diagnose what is happening in the extraction and recommend the smallest \
 set of adjustments that will most improve the next shot. Reason from the physics — \
@@ -187,12 +197,36 @@ def build_draft_message(
     return "\n\n".join(parts)
 
 
-def build_user_message(shots: list[dict[str, Any]], grinder: Optional[str] = None) -> str:
+def _compact_review(suggestions: dict[str, Any]) -> str:
+    """One-paragraph summary of a past review's advice, for interleaving as context."""
+    parts = []
+    if suggestions.get("score") is not None:
+        parts.append(f"scored it {suggestions['score']}/10")
+    if suggestions.get("diagnosis"):
+        parts.append(f"diagnosis: {suggestions['diagnosis']}")
+    if suggestions.get("grind_change") and suggestions["grind_change"] != "none":
+        parts.append(f"grind: {suggestions['grind_change']}")
+    if suggestions.get("dose_yield_change") and suggestions["dose_yield_change"] != "none":
+        parts.append(f"dose/yield: {suggestions['dose_yield_change']}")
+    for pc in suggestions.get("profile_changes") or []:
+        parts.append(f"profile: {pc.get('parameter')} → {pc.get('change')}")
+    return "; ".join(parts) if parts else "no changes recommended"
+
+
+def build_user_message(
+    shots: list[dict[str, Any]],
+    grinder: Optional[str] = None,
+    coffee: Optional[str] = None,
+    prior_reviews: Optional[dict[str, dict[str, Any]]] = None,
+) -> str:
     """Render the recent-shots context into the user turn.
 
     `shots` is newest-first; we label them so Claude knows the ordering.
     `grinder` is the barista's free-text description of their grinder, so grind
     advice can be given in that grinder's own steps/clicks/numbers.
+    `coffee` describes the beans (roast level, roast date) so advice fits them.
+    `prior_reviews` maps shot id → that review's suggestions, letting Claude see
+    what it advised after each older shot and whether the advice worked.
     """
     if not shots:
         return "No shots are available to review."
@@ -202,11 +236,17 @@ def build_user_message(shots: list[dict[str, Any]], grinder: Optional[str] = Non
     ]
     if grinder:
         lines.append(f"GRINDER: {grinder}\n")
+    if coffee:
+        lines.append(f"COFFEE: {coffee}\n")
     for idx, shot in enumerate(shots):
         label = "most recent" if idx == 0 else f"{idx} shot(s) earlier"
         lines.append(f"=== Shot {shot['id']} ({label}) ===")
         lines.append(json.dumps(shot["transformed"], indent=2, default=str))
         if shot.get("tasting_notes"):
             lines.append(f"TASTING NOTES (from the barista, on this shot): {shot['tasting_notes']}")
+        if prior_reviews and idx > 0 and shot["id"] in prior_reviews:
+            lines.append(
+                "REVIEW GIVEN AFTER THIS SHOT: " + _compact_review(prior_reviews[shot["id"]])
+            )
         lines.append("")
     return "\n".join(lines)

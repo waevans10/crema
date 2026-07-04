@@ -51,6 +51,12 @@ class CremaConfig(BaseSettings):
     # (stored in the DB) overrides this env default once set.
     grinder: str = ""
 
+    # The coffee currently in the hopper, in your own words ("Ethiopian natural,
+    # light roast, roasted 2 weeks ago"). Grounds review advice in the beans —
+    # light vs dark roasts want different grinds and temperatures. The UI/CLI
+    # setting (stored in the DB) overrides this env default once set.
+    coffee: str = ""
+
     # Whether the scheduled timer auto-reviews new shots. This is the *default*;
     # the UI/CLI toggle (stored in the DB) overrides it once set. Off by default so
     # nothing spends automatically until you turn it on.

@@ -267,6 +267,26 @@ async def latest_review(db: aiosqlite.Connection) -> Optional[dict[str, Any]]:
     return _review_row(row) if row else None
 
 
+async def latest_reviews_for_shots(
+    db: aiosqlite.Connection, shot_ids: list[str]
+) -> dict[str, dict[str, Any]]:
+    """Map shot id → the latest review's suggestions for each shot that has one.
+
+    Used to interleave past advice with the shot history in review context, so
+    Claude can see whether its earlier recommendations worked.
+    """
+    if not shot_ids:
+        return {}
+    placeholders = ",".join("?" for _ in shot_ids)
+    async with db.execute(
+        f"SELECT shot_id, suggestions FROM reviews WHERE shot_id IN ({placeholders}) "
+        "ORDER BY created_at ASC, id ASC",  # later rows overwrite → latest wins
+        tuple(shot_ids),
+    ) as cur:
+        rows = await cur.fetchall()
+    return {r["shot_id"]: json.loads(r["suggestions"]) for r in rows}
+
+
 async def get_review(db: aiosqlite.Connection, review_id: int) -> Optional[dict[str, Any]]:
     """Return a single review by id, or None."""
     async with db.execute(

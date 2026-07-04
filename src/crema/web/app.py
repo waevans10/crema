@@ -642,6 +642,7 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         edits = await db.list_pending_edits(conn, limit=10)
         autoreview = await db.get_bool_setting(conn, "autoreview", _cfg.autoreview)
         grinder = (await db.get_setting(conn, "grinder")) or _cfg.grinder
+        coffee = (await db.get_setting(conn, "coffee")) or _cfg.coffee
     finally:
         await conn.close()
     auto_pill = _pill(f"auto-review {'on' if autoreview else 'off'}", "c-ok" if autoreview else "c-muted", dot=True)
@@ -678,6 +679,14 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         <label class="muted" style="font-size:.88rem" for="grinder">Grinder</label>
         <input id="grinder" name="grinder" type="text" value="{html.escape(grinder)}"
           placeholder="e.g. Eureka Mignon Specialità, stepless — helps tailor grind advice"
+          style="flex:1;min-width:14rem;font:inherit;color:var(--text);background:var(--surface-2);
+          border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
+        <button class="btn btn-sm btn-ghost" type="submit">Save</button>
+      </form>
+      <form method="post" action="/coffee" class="row" style="margin-top:.6rem">
+        <label class="muted" style="font-size:.88rem" for="coffee">Coffee</label>
+        <input id="coffee" name="coffee" type="text" value="{html.escape(coffee)}"
+          placeholder="e.g. Ethiopian natural, light roast, roasted 2 weeks ago — grounds the advice in your beans"
           style="flex:1;min-width:14rem;font:inherit;color:var(--text);background:var(--surface-2);
           border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
         <button class="btn btn-sm btn-ghost" type="submit">Save</button>
@@ -729,6 +738,18 @@ async def set_grinder(grinder: str = Form("")) -> RedirectResponse:
     finally:
         await conn.close()
     note = "Grinder saved — future reviews will phrase grind advice for it." if grinder.strip() else "Grinder cleared."
+    return RedirectResponse("/?note=" + quote(note), status_code=303)
+
+
+@app.post("/coffee")
+async def set_coffee(coffee: str = Form("")) -> RedirectResponse:
+    """Save the coffee description used to ground review advice in the beans."""
+    conn = await db.connect(_cfg.db_path)
+    try:
+        await db.set_setting(conn, "coffee", coffee.strip()[:300])
+    finally:
+        await conn.close()
+    note = "Coffee saved — future reviews will tailor advice to these beans." if coffee.strip() else "Coffee cleared."
     return RedirectResponse("/?note=" + quote(note), status_code=303)
 
 

@@ -156,6 +156,30 @@ def grinder(
 
 
 @app.command()
+def coffee(
+    description: Optional[str] = typer.Argument(
+        None, help='The beans in the hopper, in your own words (omit to show the current setting). Pass "" to clear.'
+    ),
+) -> None:
+    """Describe your coffee (roast level, roast date) so reviews fit the beans."""
+
+    async def _run() -> None:
+        cfg = _config()
+        conn = await db.connect(cfg.db_path)
+        try:
+            if description is None:
+                current = (await db.get_setting(conn, "coffee")) or cfg.coffee
+                typer.echo(f"Coffee: {current}" if current else "No coffee set.")
+                return
+            await db.set_setting(conn, "coffee", description.strip()[:300])
+            typer.echo(f"Coffee set to: {description.strip()}" if description.strip() else "Coffee cleared.")
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
 def taste(
     shot_id: str = typer.Argument(..., help="Shot id the notes are about (e.g. 000091)."),
     notes: Optional[str] = typer.Argument(

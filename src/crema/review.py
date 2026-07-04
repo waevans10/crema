@@ -42,8 +42,13 @@ async def _review(
         return None
 
     # The barista's grinder description (set via UI/CLI, env default) lets Claude
-    # phrase grind advice in that grinder's own steps/clicks/numbers.
+    # phrase grind advice in that grinder's own steps/clicks/numbers; the coffee
+    # description grounds advice in the beans (roast level/date).
     grinder = (await db.get_setting(conn, "grinder")) or config.grinder or None
+    coffee = (await db.get_setting(conn, "coffee")) or config.coffee or None
+    # Past reviews for the older shots in the window, so Claude sees the advice
+    # given after each shot and whether the next shot improved.
+    prior_reviews = await db.latest_reviews_for_shots(conn, [s["id"] for s in shots[1:]])
 
     client = AsyncAnthropic()
     response = await client.messages.parse(
@@ -53,7 +58,12 @@ async def _review(
         # cap stops the model mid-thought before the JSON is emitted.
         max_tokens=8192,
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": build_user_message(shots, grinder=grinder)}],
+        messages=[{
+            "role": "user",
+            "content": build_user_message(
+                shots, grinder=grinder, coffee=coffee, prior_reviews=prior_reviews
+            ),
+        }],
         output_format=ReviewResult,
     )
 
