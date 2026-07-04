@@ -18,6 +18,7 @@ from . import db
 from .config import CremaConfig
 from .doctor import run_checks
 from .draft import draft_from_review
+from .export import SHARE_TERMS, build_export_bundle, share_bundle
 from .ingest import ingest_new_shots
 from .push import discard_edit, push_edit
 from .review import review_recent, review_shots
@@ -151,6 +152,65 @@ def grinder(
             typer.echo(f"Grinder set to: {description.strip()}" if description.strip() else "Grinder cleared.")
         finally:
             await conn.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
+def export(
+    out: Optional[str] = typer.Option(
+        None, "--out", help="Write the bundle here (default: crema-export-<date>.json)."
+    ),
+) -> None:
+    """Write the anonymized shot bundle to a file so you can read what sharing would send."""
+
+    async def _run() -> None:
+        import datetime as _dt
+        from pathlib import Path
+
+        cfg = _config()
+        conn = await db.connect(cfg.db_path)
+        try:
+            bundle = await build_export_bundle(conn, cfg)
+        finally:
+            await conn.close()
+        path = Path(out) if out else Path(f"crema-export-{_dt.date.today().isoformat()}.json")
+        path.write_text(json.dumps(bundle, indent=2, default=str))
+        typer.echo(
+            f"Wrote {len(bundle['shots'])} shots and {len(bundle['reviews'])} reviews to {path}."
+        )
+        typer.echo("Read it over — this is exactly what `crema share` would send.")
+
+    asyncio.run(_run())
+
+
+@app.command()
+def share(
+    yes: bool = typer.Option(False, "--yes", help="Skip the confirmation prompt (you've read the terms)."),
+) -> None:
+    """Opt-in: send your anonymized shot bundle to the community pool. Never automatic."""
+
+    async def _run() -> None:
+        cfg = _config()
+        if not cfg.share_url:
+            typer.echo("Sharing is not configured (CREMA_SHARE_URL is empty).")
+            raise typer.Exit(1)
+        typer.echo(SHARE_TERMS)
+        if not yes and not typer.confirm("Share your bundle under these terms?"):
+            typer.echo("Not shared.")
+            return
+        conn = await db.connect(cfg.db_path)
+        try:
+            bundle = await build_export_bundle(conn, cfg)
+        finally:
+            await conn.close()
+        if not bundle["shots"]:
+            typer.echo("Nothing to share yet — no shots in the DB.")
+            return
+        reply = await share_bundle(bundle, cfg.share_url)
+        typer.echo(
+            f"Shared {len(bundle['shots'])} shots / {len(bundle['reviews'])} reviews. Server: {reply}"
+        )
 
     asyncio.run(_run())
 

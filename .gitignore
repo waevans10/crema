@@ -11,3 +11,6 @@ build/
 *.egg-info/
 .pytest_cache/
 scratch/
+node_modules/
+crema-export-*.json
+share-worker/worker-configuration.d.ts

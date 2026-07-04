@@ -255,3 +255,34 @@ def test_shot_coffee_stamped_on_insert_and_preserved_on_reingest(tmp_path):
             await conn.close()
 
     asyncio.run(_run())
+
+
+def test_export_bundle_shape_and_stable_install_id(tmp_path):
+    """Bundle carries shots chronologically + reviews, and the install id persists."""
+    from crema.config import CremaConfig
+    from crema.export import build_export_bundle
+
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            cfg = CremaConfig(db_path=tmp_path / "crema.db")
+            await crema_db.upsert_shot(conn, "000001", {"time": 28.0}, captured_at=100.0, coffee="light roast")
+            await crema_db.upsert_shot(conn, "000002", {"time": 31.0}, captured_at=200.0)
+            await crema_db.set_shot_tasting_notes(conn, "000001", "sour")
+            await crema_db.insert_review(conn, "000001", "m", {"diagnosis": "fast"})
+            bundle = await build_export_bundle(conn, cfg)
+            assert bundle["schema_version"] == 1
+            # Chronological: oldest first, so advice->next-shot pairs read in order.
+            assert [s["id"] for s in bundle["shots"]] == ["000001", "000002"]
+            assert bundle["shots"][0]["coffee"] == "light roast"
+            assert bundle["shots"][0]["tasting_notes"] == "sour"
+            assert bundle["reviews"][0]["shot_id"] == "000001"
+            assert bundle["reviews"][0]["suggestions"] == {"diagnosis": "fast"}
+            # Same install id on a second export.
+            again = await build_export_bundle(conn, cfg)
+            assert again["install_id"] == bundle["install_id"]
+            assert len(bundle["install_id"]) == 36  # uuid4
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())

@@ -203,6 +203,8 @@ crema grinder ["DESC"]    # describe your grinder so grind advice uses its steps
 crema coffee ["DESC"]     # describe the beans in the hopper so advice fits them
 crema taste SHOT_ID "..." # record how a shot tasted (--beans to set that shot's coffee)
 crema serve               # web report at http://127.0.0.1:8765
+crema export              # write your anonymized shot bundle to a JSON file
+crema share               # opt-in: send the bundle to the community pool (asks first)
 ```
 
 ## Running it unattended on a Pi
@@ -327,6 +329,26 @@ deliberately turn auto-review on. Levers if you want it cheaper: lower
 `CREMA_REVIEW_MODEL=claude-sonnet-5` (the cheap default) rather than an Opus
 model. You can also set a spend limit on your key in the
 [Anthropic Console](https://console.anthropic.com/) as a hard backstop.
+
+## Sharing shot data (opt-in)
+
+Every crema install quietly builds the dataset a trained espresso model would
+need — (context → advice → next shot → outcome) examples. If enough people pool
+theirs, that dataset exists for the first time. Strictly opt-in:
+
+- `crema export` writes your anonymized bundle to a local JSON file — shots,
+  telemetry, beans, tasting notes, and the reviews' advice, identified only by
+  a random install UUID. Read it: it is exactly what sharing would send.
+- `crema share` shows the terms and asks for confirmation **every time**, then
+  sends the bundle to the community pool. Nothing is ever shared automatically,
+  and an empty `CREMA_SHARE_URL` disables sharing entirely.
+
+Plain-words terms: free-text fields (profile names, coffee, tasting notes) are
+included as you typed them, so read your export first. By sharing you grant the
+crema project a license to use the data **including commercially**; the pooled
+dataset is published for community use under **CC BY-NC 4.0**
+(non-commercial, attribution). The collection endpoint is a small Cloudflare
+Worker — see [`share-worker/`](share-worker/) to run your own.
 
 ## Scheduling with cron (alternative)
 

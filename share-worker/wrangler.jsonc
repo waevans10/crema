@@ -1,0 +1,19 @@
+// Cloudflare Worker for the crema community shot pool.
+// Deploy: npx wrangler r2 bucket create crema-pool && npx wrangler deploy
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "crema-pool",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-04",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "r2_buckets": [
+    {
+      "binding": "POOL",
+      "bucket_name": "crema-pool"
+    }
+  ]
+}

@@ -57,6 +57,10 @@ class CremaConfig(BaseSettings):
     # setting (stored in the DB) overrides this env default once set.
     coffee: str = ""
 
+    # Community shot pool endpoint for the opt-in `crema share` command.
+    # Empty = sharing disabled. Sharing NEVER happens automatically.
+    share_url: str = ""
+
     # Whether the scheduled timer auto-reviews new shots. This is the *default*;
     # the UI/CLI toggle (stored in the DB) overrides it once set. Off by default so
     # nothing spends automatically until you turn it on.
