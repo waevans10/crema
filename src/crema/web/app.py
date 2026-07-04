@@ -7,6 +7,7 @@ pushing profile edits back is Phase 2.
 
 from __future__ import annotations
 
+import asyncio
 import html
 import secrets
 from typing import Any, Optional
@@ -163,6 +164,25 @@ def _render_edits(edits: list[dict[str, Any]]) -> str:
     return "".join(out)
 
 
+async def _machine_status() -> tuple[bool, str]:
+    """Fast reachability probe: a short TCP connect to the device, not a request.
+
+    Returns (reachable, host). Uses a 1.5s timeout so the page stays responsive
+    when the machine is powered off (a dead host would otherwise hang ~15s)."""
+    g = _cfg.gaggimate()
+    host, port = g.host, (443 if g.use_https else 80)
+    try:
+        _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=1.5)
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:  # noqa: BLE001
+            pass
+        return True, host
+    except Exception:  # noqa: BLE001 — any failure means "not reachable right now"
+        return False, host
+
+
 def _redirect_error(exc: Exception) -> RedirectResponse:
     """Send the user back to the report with a readable error banner."""
     msg = str(exc) or exc.__class__.__name__
@@ -199,6 +219,13 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         edits = await db.list_pending_edits(conn, limit=10)
     finally:
         await conn.close()
+    reachable, machine_host = await _machine_status()
+    dot = "#2e7d32" if reachable else "#c0392b"
+    machine = (
+        f"<p style='margin:.2rem 0 1rem'><span style='color:{dot}'>●</span> "
+        f"Machine {'online' if reachable else 'off'} "
+        f"<span class='muted'>({html.escape(machine_host)})</span></p>"
+    )
     banner = ""
     if error:
         banner += f"<div class='card' style='color:#c62828'>{html.escape(error)}</div>"
@@ -212,7 +239,7 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         for sh in shots
     ) or "<div class='card muted'>No shots ingested yet.</div>"
     body = f"""
-      <h1>crema ☕</h1>{banner}
+      <h1>crema ☕</h1>{machine}{banner}
       <form method="post" action="/review"><button type="submit">Run review</button></form>
       <h2>Latest review</h2>{_render_review(review)}
       <h2>Profile edits</h2>{_render_edits(edits)}
