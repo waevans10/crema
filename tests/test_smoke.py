@@ -366,3 +366,34 @@ def test_resolve_share_url_override_and_off_switch(tmp_path):
             assert await resolve_share_url(cfg) is None
 
     asyncio.run(_run())
+
+
+def test_taste_hint_prefers_review_then_duration_heuristic():
+    from crema.web.app import _taste_hint
+
+    shot_fast = {"id": "1", "transformed": {"duration_seconds": 18.0}}
+    shot_slow = {"id": "2", "transformed": {"duration_seconds": 49.3}}
+    shot_mid = {"id": "3", "transformed": {"duration_seconds": 30.0}}
+    shot_nodata = {"id": "4", "transformed": {}}
+
+    # Review wins over the heuristic and carries the score.
+    hint = _taste_hint(shot_fast, {"diagnosis": "Gushing, badly channeled.", "score": 3})
+    assert "AI read" in hint and "3/10" in hint and "Gushing" in hint
+
+    assert "sour side" in _taste_hint(shot_fast, None)
+    assert "bitter side" in _taste_hint(shot_slow, None)
+    assert "classic window" in _taste_hint(shot_mid, None)
+    assert _taste_hint(shot_nodata, None) == ""
+
+
+def test_taste_vocab_defs_cover_all_chips():
+    """Every chip word must have a definition (legend + tooltip stay in sync)."""
+    from crema.web.app import _TASTE_CHIPS, _TASTE_DEFS, _taste_chips_html, _taste_guide_html
+
+    for _, words in _TASTE_CHIPS:
+        for w in words:
+            assert w in _TASTE_DEFS, f"missing definition for chip: {w}"
+    chips = _taste_chips_html()
+    assert "tchip(this)" in chips and "astringent" in chips
+    guide = _taste_guide_html()
+    assert "SWEET SPOT" in guide and "over-steeped black tea" in guide

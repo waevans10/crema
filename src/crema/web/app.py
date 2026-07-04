@@ -197,6 +197,22 @@ pre{background:var(--surface-2);border:1px solid var(--border);border-radius:10p
 .banner.warn ul{margin:.3rem 0 0;padding-left:1.2rem}
 .shot{display:flex;align-items:center;justify-content:space-between;gap:.8rem}
 .shot .meta{min-width:0}
+.chips{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.45rem}
+.chip{font:inherit;font-size:.78rem;font-weight:600;color:var(--text);
+  background:var(--surface-2);border:1px solid var(--border);border-radius:999px;
+  padding:.18rem .6rem;cursor:pointer;transition:border-color .12s}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chip-label{font-size:.72rem;font-weight:700;letter-spacing:.04em;color:var(--muted);
+  align-self:center;margin-right:.1rem;text-transform:uppercase}
+.taste-guide svg{width:100%;height:auto;display:block;margin:.5rem 0 .2rem}
+.taste-guide .zones{display:flex;gap:.6rem;font-size:.82rem;margin-top:.2rem}
+.taste-guide .zones>div{flex:1;min-width:0}
+.taste-guide .zones b{display:block;font-size:.78rem;letter-spacing:.03em;text-transform:uppercase}
+.z-sour b{color:#c99a27}.z-ok b{color:var(--ok)}.z-bitter b{color:#a4653a}
+@media (max-width:560px){.taste-guide .zones{flex-direction:column}}
+.defs{display:flex;flex-direction:column;gap:.6rem;margin-top:.5rem;font-size:.84rem}
+.def-group .def{margin:.18rem 0;color:var(--muted)}
+.def-group .def b{color:var(--text)}
 form.inline{display:inline;margin:0}
 .brand{display:flex;align-items:center;gap:.65rem;text-decoration:none;color:inherit}
 .brand img{width:32px;height:32px;border-radius:9px;display:block}
@@ -243,6 +259,13 @@ details.sub>summary:hover{color:var(--accent)}
 """
 
 
+# Appends a standard descriptor to the tasting-notes textarea in the same form.
+_CHIP_JS = """
+function tchip(b){var t=b.closest('form').querySelector('textarea');if(!t)return;
+var w=b.getAttribute('data-w');t.value=t.value.trim()?t.value.replace(/[,\\s]+$/,'')+', '+w:w;t.focus();}
+"""
+
+
 def _page(body: str) -> str:
     return (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
@@ -250,7 +273,8 @@ def _page(body: str) -> str:
         "<title>crema · shot report</title>"
         "<link rel='icon' type='image/png' href='/icon.png'>"
         "<link rel='apple-touch-icon' href='/icon.png'>"
-        f"<style>{_CSS}</style></head><body><div class='wrap'>{body}</div></body></html>"
+        f"<style>{_CSS}</style><script>{_CHIP_JS}</script></head>"
+        f"<body><div class='wrap'>{body}</div></body></html>"
     )
 
 
@@ -503,10 +527,143 @@ def _fmt_qty(value: Any, suffix: str) -> str:
     return f"{value}{suffix}"
 
 
-def _render_shots(shots: list[dict[str, Any]]) -> str:
+# Standard tasting vocabulary, grouped by what it signals. Using these words
+# consistently makes reviews sharper and shared bundles cleaner to study.
+_TASTE_CHIPS: list[tuple[str, list[str]]] = [
+    ("sour side", ["sour", "sharp", "thin", "salty", "quick finish"]),
+    ("dialled in", ["sweet", "balanced", "syrupy", "long finish"]),
+    ("bitter side", ["bitter", "harsh", "astringent", "drying", "hollow"]),
+    ("strength", ["weak / watery", "too intense / muddy"]),
+]
+
+# What each word actually means in the mouth — shown in the guide's legend and
+# as a tooltip on every chip, so newer palates can match word to sensation.
+_TASTE_DEFS: dict[str, str] = {
+    "sour": "acidic bite right at the front, like lemon juice or unripe fruit",
+    "sharp": "aggressive first sip that pricks the tongue",
+    "thin": "watery texture — no weight on the tongue",
+    "salty": "faint saltiness at the edges of the tongue — a classic under-extraction tell",
+    "quick finish": "the flavour vanishes seconds after you swallow",
+    "sweet": "natural sweetness, like caramel or ripe fruit",
+    "balanced": "no single note shouts — acidity, sweetness and bitterness in proportion",
+    "syrupy": "thick, coating texture, like warm honey",
+    "long finish": "the flavour keeps developing pleasantly after the sip",
+    "bitter": "dark, roasty bite at the back of the tongue, like burnt toast",
+    "harsh": "rough bitterness that bulldozes every other note",
+    "astringent": "dries and puckers the mouth, like over-steeped black tea",
+    "drying": "mouth feels parched right after swallowing",
+    "hollow": "the aroma promises more than the taste delivers — an empty middle",
+    "weak / watery": "tastes diluted overall — a strength (dose/ratio) issue, not extraction",
+    "too intense / muddy": "so concentrated the notes blur together — a ratio issue",
+}
+
+
+def _taste_chips_html() -> str:
+    groups = []
+    for label, words in _TASTE_CHIPS:
+        chips = "".join(
+            f"<button type='button' class='chip' data-w='{html.escape(w)}' "
+            f"title='{html.escape(_TASTE_DEFS.get(w, ''))}' "
+            f"onclick='tchip(this)'>{html.escape(w)}</button>"
+            for w in words
+        )
+        groups.append(f"<span class='chip-label'>{html.escape(label)}</span>{chips}")
+    return f"<div class='chips'>{'&nbsp;&nbsp;'.join(groups)}</div>"
+
+
+def _taste_legend_html() -> str:
+    """Definition legend for the taste guide, grouped like the chips."""
+    rows = []
+    for label, words in _TASTE_CHIPS:
+        defs = "".join(
+            f"<div class='def'><b>{html.escape(w)}</b> — {html.escape(_TASTE_DEFS[w])}</div>"
+            for w in words
+            if w in _TASTE_DEFS
+        )
+        rows.append(f"<div class='def-group'><span class='chip-label'>{html.escape(label)}</span>{defs}</div>")
+    return f"<div class='defs'>{''.join(rows)}</div>"
+
+
+def _taste_hint(shot: dict[str, Any], review: Optional[dict[str, Any]]) -> str:
+    """One line telling a newer taster what this shot will LIKELY taste like.
+
+    Prefer the AI review of this very shot (real telemetry read); fall back to
+    a plain duration heuristic when the shot hasn't been reviewed yet.
+    """
+    if review:
+        diag = str(review.get("diagnosis") or "").strip()
+        score = review.get("score")
+        if diag:
+            if len(diag) > 160:
+                diag = diag[:157].rstrip() + "…"
+            badge = f" (scored {score}/10)" if isinstance(score, int) else ""
+            return f"AI read of this shot{badge}: {diag}"
+    dur = shot.get("transformed", {}).get("duration_seconds")
+    try:
+        dur = float(dur)
+    except (TypeError, ValueError):
+        return ""
+    if dur < 22:
+        return (
+            f"Telemetry hint: {dur:g}s is a fast shot — fast shots usually land on the "
+            "sour side (sour, sharp, thin). Taste for that."
+        )
+    if dur > 40:
+        return (
+            f"Telemetry hint: {dur:g}s is a slow shot — slow shots usually land on the "
+            "bitter side (bitter, harsh, drying). Taste for that."
+        )
+    return (
+        f"Telemetry hint: {dur:g}s is in the classic window — judge sweetness and "
+        "balance, and note whichever side it leans."
+    )
+
+
+# The extraction spectrum, as a theme-aware inline SVG: where a taste falls
+# tells you which way to move the next shot.
+_TASTE_GUIDE = """
+<details class="card taste-guide"><summary>Espresso taste guide — which words mean what</summary>
+  <svg viewBox="0 0 600 84" role="img" aria-label="Extraction spectrum from sour to bitter">
+    <defs><linearGradient id="tg" x1="0" x2="1">
+      <stop offset="0" stop-color="#c99a27"/><stop offset=".38" stop-color="#7d9958"/>
+      <stop offset=".62" stop-color="#7d9958"/><stop offset="1" stop-color="#a4653a"/>
+    </linearGradient></defs>
+    <rect x="10" y="34" width="580" height="14" rx="7" fill="url(#tg)"/>
+    <text x="10" y="22" fill="currentColor" font-size="13" font-weight="700">SOUR</text>
+    <text x="300" y="22" fill="currentColor" font-size="13" font-weight="700" text-anchor="middle">SWEET SPOT</text>
+    <text x="590" y="22" fill="currentColor" font-size="13" font-weight="700" text-anchor="end">BITTER</text>
+    <text x="10" y="70" fill="currentColor" opacity=".65" font-size="11.5">under-extracted → grind finer</text>
+    <text x="300" y="70" fill="currentColor" opacity=".65" font-size="11.5" text-anchor="middle">keep it here</text>
+    <text x="590" y="70" fill="currentColor" opacity=".65" font-size="11.5" text-anchor="end">over-extracted → grind coarser</text>
+  </svg>
+  <div class="zones">
+    <div class="z-sour"><b>Sour · under</b><span class="muted">sharp, thin, salty, lemony, finish
+      vanishes fast. Water left too soon — grind finer (or hotter / longer).</span></div>
+    <div class="z-ok"><b>Sweet · dialled in</b><span class="muted">sweetness, body, syrupy texture,
+      a finish that lingers pleasantly. Change nothing.</span></div>
+    <div class="z-bitter"><b>Bitter · over</b><span class="muted">harsh, astringent (dries the
+      mouth), hollow. Water stayed too long — grind coarser (or cooler / shorter).</span></div>
+  </div>
+  <p class="muted" style="font-size:.82rem;margin:.6rem 0 0">Strength is a separate axis:
+  <b>weak/watery</b> or <b>too intense/muddy</b> point at dose &amp; ratio, not extraction.
+  Using these words in tasting notes helps the review connect your palate to the telemetry —
+  the chips below each shot insert them for you.</p>
+  <details class="sub" style="margin-top:.5rem"><summary>Word-by-word legend</summary>
+  {legend}</details>
+</details>"""
+
+
+def _taste_guide_html() -> str:
+    return _TASTE_GUIDE.replace("{legend}", _taste_legend_html())
+
+
+def _render_shots(
+    shots: list[dict[str, Any]],
+    reviews_by_shot: Optional[dict[str, dict[str, Any]]] = None,
+) -> str:
     if not shots:
         return "<div class='card muted'>No shots ingested yet.</div>"
-    rows = []
+    rows = [_taste_guide_html()]
     for sh in shots:
         t = sh["transformed"]
         notes = sh.get("tasting_notes") or ""
@@ -517,6 +674,12 @@ def _render_shots(shots: list[dict[str, Any]]) -> str:
         if notes:
             summary_bits.append(f"Tasting notes: {html.escape(notes)}")
         summary = " · ".join(summary_bits) or "Add beans / tasting notes for this shot"
+        hint = _taste_hint(sh, (reviews_by_shot or {}).get(sh["id"]))
+        hint_html = (
+            f"<p class='muted' style='font-size:.82rem;margin:.45rem 0 0'>{html.escape(hint)}</p>"
+            if hint
+            else ""
+        )
         rows.append(
             f"""<div class="card shot">
               <span class="meta"><b>Shot {html.escape(sh['id'])}</b>
@@ -529,11 +692,13 @@ def _render_shots(shots: list[dict[str, Any]]) -> str:
                 <button class="btn btn-sm btn-ghost" type="submit">Review this shot</button>
               </form>
               <details class="sub"><summary>{summary}</summary>
+                {hint_html}
                 <form method="post" action="/shots/{html.escape(sh['id'])}/tasting-notes">
                   <input name="coffee" type="text" value="{html.escape(shot_coffee)}"
                     placeholder="Beans this shot was pulled with (blank = the session coffee)"
                     style="margin-top:.4rem;width:100%;font:inherit;color:var(--text);background:var(--surface-2);
                     border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
+                  {_taste_chips_html()}
                   <textarea name="notes" rows="2" style="margin-top:.4rem" placeholder="e.g. sour and thin — goes into the next review as taste feedback">{html.escape(notes)}</textarea>
                   <button class="btn btn-sm btn-ghost" type="submit">Save</button>
                 </form>
@@ -663,6 +828,7 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         autoreview = await db.get_bool_setting(conn, "autoreview", _cfg.autoreview)
         grinder = (await db.get_setting(conn, "grinder")) or _cfg.grinder
         coffee = (await db.get_setting(conn, "coffee")) or _cfg.coffee
+        reviews_by_shot = await db.latest_reviews_for_shots(conn, [s["id"] for s in shots])
     finally:
         await conn.close()
     auto_pill = _pill(f"auto-review {'on' if autoreview else 'off'}", "c-ok" if autoreview else "c-muted", dot=True)
@@ -716,7 +882,7 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
       <details class="sec" open id="edits"><summary><h2>Profile edits</h2></summary>
         {_render_edits(edits)}</details>
       <details class="sec" open id="shots"><summary><h2>Recent shots</h2></summary>
-        {_render_shots(shots)}</details>
+        {_render_shots(shots, reviews_by_shot)}</details>
     """
     return _page(body)
 
