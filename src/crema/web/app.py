@@ -497,6 +497,10 @@ def _render_shots(shots: list[dict[str, Any]]) -> str:
     rows = []
     for sh in shots:
         t = sh["transformed"]
+        notes = sh.get("tasting_notes") or ""
+        notes_summary = (
+            f"Tasting notes: {html.escape(notes)}" if notes else "Add tasting notes (how it tasted)"
+        )
         rows.append(
             f"""<div class="card shot">
               <span class="meta"><b>Shot {html.escape(sh['id'])}</b>
@@ -508,6 +512,12 @@ def _render_shots(shots: list[dict[str, Any]]) -> str:
                 <input type="hidden" name="shot_id" value="{html.escape(sh['id'])}">
                 <button class="btn btn-sm btn-ghost" type="submit">Review this shot</button>
               </form>
+              <details class="sub"><summary>{notes_summary}</summary>
+                <form method="post" action="/shots/{html.escape(sh['id'])}/tasting-notes">
+                  <textarea name="notes" rows="2" style="margin-top:.4rem" placeholder="e.g. sour and thin — goes into the next review as taste feedback">{html.escape(notes)}</textarea>
+                  <button class="btn btn-sm btn-ghost" type="submit">Save tasting notes</button>
+                </form>
+              </details>
             </div>"""
         )
     return "".join(rows)
@@ -734,6 +744,24 @@ async def run_analyze(shot_id: str = Form(...)) -> RedirectResponse:
     finally:
         await conn.close()
     return RedirectResponse("/", status_code=303)
+
+
+@app.post("/shots/{shot_id}/tasting-notes")
+async def save_tasting_notes(shot_id: str, notes: str = Form("")) -> RedirectResponse:
+    """Save the barista's tasting notes on a shot; future reviews see them as taste feedback."""
+    conn = await db.connect(_cfg.db_path)
+    try:
+        found = await db.set_shot_tasting_notes(conn, shot_id, notes.strip()[:500] or None)
+    finally:
+        await conn.close()
+    if not found:
+        return RedirectResponse("/?error=" + quote(f"Shot {shot_id} not found."), status_code=303)
+    msg = (
+        f"Tasting notes saved for shot {shot_id} — the next review will take them into account."
+        if notes.strip()
+        else f"Tasting notes cleared for shot {shot_id}."
+    )
+    return RedirectResponse("/?note=" + quote(msg), status_code=303)
 
 
 @app.post("/draft")

@@ -156,6 +156,43 @@ def grinder(
 
 
 @app.command()
+def taste(
+    shot_id: str = typer.Argument(..., help="Shot id the notes are about (e.g. 000091)."),
+    notes: Optional[str] = typer.Argument(
+        None, help='How it tasted (omit to show the current notes). Pass "" to clear.'
+    ),
+) -> None:
+    """Record how a shot tasted; future reviews weigh it alongside the telemetry."""
+
+    async def _run() -> None:
+        cfg = _config()
+        conn = await db.connect(cfg.db_path)
+        sid = shot_id.zfill(6)
+        try:
+            if notes is None:
+                shot = await db.get_shot(conn, sid)
+                if shot is None:
+                    typer.echo(f"Shot {sid} not found — run `crema ingest` first.")
+                    return
+                current = shot.get("tasting_notes")
+                typer.echo(f"Shot {sid} tasting notes: {current}" if current else f"No tasting notes on shot {sid}.")
+                return
+            found = await db.set_shot_tasting_notes(conn, sid, notes.strip()[:500] or None)
+            if not found:
+                typer.echo(f"Shot {sid} not found — run `crema ingest` first.")
+                return
+            typer.echo(
+                f"Tasting notes saved for shot {sid} — the next review will take them into account."
+                if notes.strip()
+                else f"Tasting notes cleared for shot {sid}."
+            )
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
 def analyze(shot_id: str = typer.Argument(..., help="Shot id to analyze (e.g. 000091).")) -> None:
     """Run a Claude review of one specific shot."""
 

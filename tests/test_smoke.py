@@ -10,8 +10,10 @@ Run with:  uv run pytest   (or: pytest)
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 
+from crema import db as crema_db
 from crema.draft import _clamp, _to_device_phase, diff_stop_conditions
 from crema.prompts import (
     DraftedProfile,
@@ -102,6 +104,18 @@ def test_build_draft_message_includes_notes_and_previous_draft():
     assert "PREVIOUS DRAFT" in msg and "raised temp" in msg
 
 
+def test_build_user_message_includes_tasting_notes_when_set():
+    shots = [
+        {"id": "shot-a", "transformed": {"time": 28.0}, "tasting_notes": "sour and thin"},
+        {"id": "shot-b", "transformed": {"time": 31.0}},
+    ]
+    msg = build_user_message(shots)
+    assert "TASTING NOTES" in msg
+    assert "sour and thin" in msg
+    # Only the shot that has notes gets a notes line.
+    assert msg.count("TASTING NOTES") == 1
+
+
 def test_build_user_message_includes_grinder_when_set():
     shots = [{"id": "1", "transformed": {}}]
     assert "GRINDER: Niche Zero" in build_user_message(shots, grinder="Niche Zero")
@@ -137,3 +151,27 @@ def test_to_device_phase_clamps_unsafe_values():
     assert phase["temperature"] <= 96.0
     assert phase["pump"]["pressure"] <= 12.0
     assert phase["pump"]["flow"] >= 0.0
+
+
+def test_tasting_notes_round_trip_and_migration(tmp_path):
+    """Notes save/clear on a real DB file, and recent_shots surfaces them."""
+
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            await crema_db.upsert_shot(conn, "000001", {"time": 28.0})
+            # Save, read back via both accessors.
+            assert await crema_db.set_shot_tasting_notes(conn, "000001", "sour and thin")
+            shot = await crema_db.get_shot(conn, "000001")
+            assert shot is not None and shot["tasting_notes"] == "sour and thin"
+            recent = await crema_db.recent_shots(conn, limit=5)
+            assert recent[0]["tasting_notes"] == "sour and thin"
+            # Clear with None; unknown shot returns False.
+            assert await crema_db.set_shot_tasting_notes(conn, "000001", None)
+            shot = await crema_db.get_shot(conn, "000001")
+            assert shot is not None and shot["tasting_notes"] is None
+            assert not await crema_db.set_shot_tasting_notes(conn, "999999", "nope")
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())

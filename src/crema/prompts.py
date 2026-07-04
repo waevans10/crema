@@ -42,10 +42,17 @@ stepped grinder" language. Stay within safe bounds (temperature 25–100°C, pre
 0–12 bar). If the shots already look good, say so and suggest nothing. Never invent \
 data that isn't in the telemetry.
 
+A shot may come with TASTING NOTES from the barista. Treat them as ground truth \
+about taste — telemetry can't taste sourness or bitterness — and reconcile them with \
+the telemetry: sour/weak/fast points toward under-extraction (finer, hotter, longer), \
+bitter/harsh/slow toward over-extraction (coarser, cooler, shorter). When taste and \
+telemetry disagree, trust the taste and say why the telemetry may have missed it.
+
 Also give the most recent shot a 1-10 quality score: 1-3 badly flawed (gushing, \
 choked, severe channeling), 4-6 drinkable but clearly off, 7-8 good, 9-10 dialled \
 in. Judge it from the telemetry (extraction time, flow/pressure shape, channeling \
-risk, temperature stability), not from taste you can't see.\
+risk, temperature stability), plus the barista's tasting notes when present — but \
+never from taste you can't see.\
 """
 
 
@@ -199,5 +206,7 @@ def build_user_message(shots: list[dict[str, Any]], grinder: Optional[str] = Non
         label = "most recent" if idx == 0 else f"{idx} shot(s) earlier"
         lines.append(f"=== Shot {shot['id']} ({label}) ===")
         lines.append(json.dumps(shot["transformed"], indent=2, default=str))
+        if shot.get("tasting_notes"):
+            lines.append(f"TASTING NOTES (from the barista, on this shot): {shot['tasting_notes']}")
         lines.append("")
     return "\n".join(lines)

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS shots (
     id            TEXT PRIMARY KEY,       -- device shot id (zero-padded, e.g. "000123")
     captured_at   REAL,                   -- unix seconds if known, else NULL
     transformed   TEXT NOT NULL,          -- AI-friendly JSON (transform_shot_for_ai output)
+    tasting_notes TEXT,                   -- barista's taste feedback, fed into future reviews
     created_at    REAL NOT NULL DEFAULT (unixepoch('now'))
 );
 
@@ -96,6 +97,11 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         # JSON list of human-readable stop-condition changes vs the base profile;
         # non-empty means the user must explicitly acknowledge before pushing.
         await db.execute("ALTER TABLE pending_edits ADD COLUMN stop_changes TEXT")
+    async with db.execute("PRAGMA table_info(shots)") as cur:
+        shot_cols = {row["name"] async for row in cur}
+    if "tasting_notes" not in shot_cols:
+        # Barista's taste feedback on a shot, included in future review context.
+        await db.execute("ALTER TABLE shots ADD COLUMN tasting_notes TEXT")
 
 
 async def upsert_profile(
@@ -188,26 +194,45 @@ async def recent_shots(db: aiosqlite.Connection, limit: int) -> list[dict[str, A
     Ordered by captured_at when present, falling back to insertion order.
     """
     async with db.execute(
-        "SELECT id, captured_at, transformed FROM shots "
+        "SELECT id, captured_at, transformed, tasting_notes FROM shots "
         "ORDER BY COALESCE(captured_at, created_at) DESC, rowid DESC LIMIT ?",
         (limit,),
     ) as cur:
         rows = await cur.fetchall()
-    return [
-        {"id": r["id"], "captured_at": r["captured_at"], "transformed": json.loads(r["transformed"])}
-        for r in rows
-    ]
+    return [_shot_row(r) for r in rows]
+
+
+def _shot_row(row: aiosqlite.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "captured_at": row["captured_at"],
+        "transformed": json.loads(row["transformed"]),
+        "tasting_notes": row["tasting_notes"],
+    }
 
 
 async def get_shot(db: aiosqlite.Connection, shot_id: str) -> Optional[dict[str, Any]]:
     """Return a single shot's stored data by id, or None."""
     async with db.execute(
-        "SELECT id, captured_at, transformed FROM shots WHERE id = ?", (shot_id,)
+        "SELECT id, captured_at, transformed, tasting_notes FROM shots WHERE id = ?", (shot_id,)
     ) as cur:
         row = await cur.fetchone()
-    if row is None:
-        return None
-    return {"id": row["id"], "captured_at": row["captured_at"], "transformed": json.loads(row["transformed"])}
+    return _shot_row(row) if row else None
+
+
+async def set_shot_tasting_notes(
+    db: aiosqlite.Connection, shot_id: str, notes: Optional[str]
+) -> bool:
+    """Save (or clear, with None/empty) the barista's tasting notes for a shot.
+
+    Returns False when the shot id doesn't exist.
+    """
+    cur = await db.execute(
+        "UPDATE shots SET tasting_notes = ? WHERE id = ?",
+        (notes or None, shot_id),
+    )
+    await db.commit()
+    return bool(cur.rowcount)
 
 
 async def insert_review(
