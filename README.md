@@ -14,10 +14,15 @@ path to draft and push a corrected profile.
 
 ## Screenshots
 
-<!-- Drop a screenshot of the web report at docs/report.png and uncomment: -->
-<!-- ![crema web report](docs/report.png) -->
+The report: a scored review of the latest shot, with grind / dose / profile
+suggestions (grind advice phrased for *your* grinder):
 
-_Add a screenshot of the web report here — see [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md) for how to capture one._
+![crema web report — scored review with suggestions](docs/report.png)
+
+Profile drafts wait for your approval — refine them with taste notes, and any
+change to the shot's stop conditions must be explicitly acknowledged:
+
+![crema profile drafts — approve, discard, or refine with notes](docs/report-edits.png)
 
 ## What you need
 
