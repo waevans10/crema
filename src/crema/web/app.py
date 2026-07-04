@@ -27,6 +27,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from .. import db
 from ..config import CremaConfig
 from ..draft import draft_from_review
+from ..export import SHARE_TERMS, maybe_autoshare, record_autoshare_consent
 from ..ingest import ingest_new_shots
 from ..push import discard_edit, push_edit
 from ..review import review_recent, review_shots
@@ -826,6 +827,7 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         shots = await db.recent_shots(conn, limit=_cfg.review_window)
         edits = await db.list_pending_edits(conn, limit=10)
         autoreview = await db.get_bool_setting(conn, "autoreview", _cfg.autoreview)
+        autoshare = await db.get_bool_setting(conn, "autoshare", False)
         grinder = (await db.get_setting(conn, "grinder")) or _cfg.grinder
         coffee = (await db.get_setting(conn, "coffee")) or _cfg.coffee
         reviews_by_shot = await db.latest_reviews_for_shots(conn, [s["id"] for s in shots])
@@ -838,6 +840,22 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         f"<button class='btn btn-sm btn-ghost' type='submit'>"
         f"Turn auto-review {'off' if autoreview else 'on'}</button></form>"
     )
+    share_pill = _pill(f"auto-share {'on' if autoshare else 'off'}", "c-ok" if autoshare else "c-muted", dot=True)
+    if autoshare:
+        share_toggle = (
+            "<form method='post' action='/autoshare' class='inline'>"
+            "<input type='hidden' name='on' value='0'>"
+            "<button class='btn btn-sm btn-ghost' type='submit'>Turn auto-share off</button></form>"
+        )
+    else:
+        share_toggle = (
+            "<details class='sub inline'><summary>Opt in to the community shot pool</summary>"
+            f"<pre style='margin:.5rem 0'>{html.escape(SHARE_TERMS)}</pre>"
+            "<form method='post' action='/autoshare' class='inline'>"
+            "<input type='hidden' name='on' value='1'>"
+            "<button class='btn btn-sm' type='submit'>I agree — turn auto-share on</button></form>"
+            "</details>"
+        )
     reachable, host = await _machine_status()
     status_pill = _pill(
         f"machine {'online' if reachable else 'off'}", "c-ok" if reachable else "c-off", dot=True
@@ -860,6 +878,9 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         <form method="post" action="/review" class="inline">
           <button class="btn" type="submit" title="Pull new shots off the machine and review them">Review new shots</button></form>
         {auto_pill}{auto_toggle}
+      </div>
+      <div class="row" style="margin-top:.5rem">
+        {share_pill}{share_toggle}
       </div>
       <form method="post" action="/grinder" class="row" style="margin-top:.6rem">
         <label class="muted" style="font-size:.88rem" for="grinder">Grinder</label>
@@ -898,10 +919,13 @@ async def run_review() -> RedirectResponse:
                 status_code=303,
             )
         await review_recent(conn, _cfg)
+        shared = await maybe_autoshare(conn, _cfg)
     except Exception as e:  # noqa: BLE001
         return _redirect_error(e)
     finally:
         await conn.close()
+    if shared:
+        return RedirectResponse("/?note=" + quote(shared.capitalize()), status_code=303)
     return RedirectResponse("/", status_code=303)
 
 
@@ -913,6 +937,22 @@ async def toggle_autoreview(on: str = Form(...)) -> RedirectResponse:
     finally:
         await conn.close()
     return RedirectResponse("/", status_code=303)
+
+
+@app.post("/autoshare")
+async def toggle_autoshare(on: str = Form(...)) -> RedirectResponse:
+    """Opt in to (terms shown beside the button) or out of pool auto-sharing."""
+    conn = await db.connect(_cfg.db_path)
+    try:
+        if on == "1":
+            await record_autoshare_consent(conn)
+            note = "Auto-share is ON — a snapshot uploads after each review. Turn it off here any time."
+        else:
+            await db.set_setting(conn, "autoshare", "0")
+            note = "Auto-share is OFF. Nothing is shared unless you run `crema share` yourself."
+    finally:
+        await conn.close()
+    return RedirectResponse("/?note=" + quote(note), status_code=303)
 
 
 @app.post("/grinder")

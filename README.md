@@ -1,10 +1,12 @@
 # crema ☕
 
-**Automated GaggiMate shot-history reviewer.** crema pulls your recent espresso
-shots off the machine, sends their telemetry to Claude, and gets back concrete
-grind / dose / profile suggestions — in a small web report you can also trigger
-on demand. It runs unattended on an always-on box (a Raspberry Pi is ideal) on
-the same network as the machine.
+**Automated espresso shot reviewer for smart machines.** crema pulls your recent
+shots off the machine — **GaggiMate** fully supported, **Gaggiuino** in beta —
+sends their telemetry to Claude, and gets back concrete grind / dose / profile
+suggestions, grounded in *your* grinder, *your* beans, and *your* tasting notes.
+It runs unattended on an always-on box (a Raspberry Pi is ideal) on the same
+network as the machine, and can opt in to a community shot pool that's building
+the first open advice→outcome espresso dataset.
 
 Think of it as the hands-off counterpart to the interactive
 [`gaggimate-mcp`](https://github.com/julianleopold/gaggimate-mcp) server: instead
@@ -27,7 +29,9 @@ change to the shot's stop conditions must be explicitly acknowledged:
 ## What you need
 
 - A **GaggiMate**-controlled espresso machine, reachable on your home network
-  (its API is LAN-only — see [How it works](#how-it-works)).
+  (its API is LAN-only — see [How it works](#how-it-works)) — or a
+  **Gaggiuino**-modded machine ([beta support](#gaggiuino-support-beta):
+  reviews/notes/sharing work; profile push-back is GaggiMate-only).
 - A separate **always-on computer on the same network** to run crema — a
   Raspberry Pi (3 / 4 / 5, or Zero 2 W) is ideal, but any always-on Linux or
   macOS machine works. **This is _not_ the espresso machine's controller:** crema
@@ -81,6 +85,16 @@ profile edit — only to pull new shots or push an approved edit back.
   and requires an explicit acknowledgement before it will push.
 - **Report** — a small web page shows reviews, drafts, and recent shots, with
   “Run review”, “Draft profile edit”, and “Approve & push” buttons.
+- **Taste feedback loop** — record how each shot tasted (an espresso taste
+  guide with a spectrum graphic, standard-vocabulary chips, and per-shot
+  telemetry hints helps newer palates find the words), tag each shot with its
+  beans, and the next review reconciles your palate with the curves. Reviews
+  also see their own earlier advice alongside the shots that followed, so they
+  build on what worked instead of repeating what didn't.
+- **Community shot pool (opt-in)** — say yes once (at setup, in the web UI, or
+  `crema autoshare on`) and crema shares your anonymized shot data after each
+  review, growing the open dataset. See
+  [Sharing shot data](#sharing-shot-data-opt-in).
 
 Grind and dose/yield are suggested as text (manual bench changes); only profile
 changes get drafted and pushed.
@@ -204,7 +218,8 @@ crema coffee ["DESC"]     # describe the beans in the hopper so advice fits them
 crema taste SHOT_ID "..." # record how a shot tasted (--beans to set that shot's coffee)
 crema serve               # web report at http://127.0.0.1:8765
 crema export              # write your anonymized shot bundle to a JSON file
-crema share               # opt-in: send the bundle to the community pool (asks first)
+crema share               # one-off share to the community pool (shows terms, asks)
+crema autoshare [on|off]  # opt in/out of automatic sharing after each review
 ```
 
 ## Running it unattended on a Pi
@@ -353,22 +368,37 @@ Every crema install quietly builds the dataset a trained espresso model would
 need — (context → advice → next shot → outcome) examples. If enough people pool
 theirs, that dataset exists for the first time. Strictly opt-in:
 
+**How you opt in** (nothing is ever shared before you do):
+
+- **At install** — `deploy/setup.sh` asks once, shows the terms, and takes
+  yes or no.
+- **Any time after** — `crema autoshare on` (CLI) or the "Opt in to the
+  community shot pool" control in the web report; both show the terms first.
+
+Once opted in, a fresh anonymized snapshot uploads automatically after each
+review — no further prompts — until you turn it off (`crema autoshare off`, or
+the web toggle). If the terms ever change, auto-share pauses until you
+re-accept. Every uploaded bundle records which terms version you accepted and
+when.
+
+The manual tools remain:
+
 - `crema export` writes your anonymized bundle to a local JSON file — shots,
   telemetry, beans, tasting notes, and the reviews' advice, identified only by
-  a random install UUID. Read it: it is exactly what sharing would send.
-- `crema share` shows the terms and asks for confirmation **every time**, then
-  sends the bundle to the community pool. Nothing is ever shared automatically.
-  The pool endpoint is discovered from a pointer file in this repo (`.pool-url`),
-  so sharing needs zero setup and the endpoint can move without breaking old
-  installs; set `CREMA_SHARE_URL` to use a self-hosted pool, or to `off` to
-  disable sharing entirely.
+  a random install UUID. Read it: it is exactly what sharing sends.
+- `crema share` does a one-off share with the terms shown and a confirmation
+  prompt — useful if you'd rather not enable auto-share.
+
+The pool endpoint is discovered from a pointer file in this repo (`.pool-url`),
+so sharing needs zero setup and the endpoint can move without breaking old
+installs; set `CREMA_SHARE_URL` to use a self-hosted pool, or to `off` to
+disable sharing entirely.
 
 Plain-words terms: free-text fields (profile names, coffee, tasting notes) are
 included as you typed them, so read your export first. By sharing you grant the
 crema project a license to use the data **including commercially**; the pooled
 dataset is published for community use under **CC BY-NC 4.0**
-(non-commercial, attribution). Every shared bundle records which terms were
-accepted and when.
+(non-commercial, attribution).
 
 **Withdrawal:** open a GitHub issue quoting your install id (shown by
 `crema export`) and your raw submissions are deleted from the pool. Data

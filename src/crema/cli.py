@@ -21,6 +21,8 @@ from .draft import draft_from_review
 from .export import (
     SHARE_TERMS,
     build_export_bundle,
+    maybe_autoshare,
+    record_autoshare_consent,
     resolve_share_url,
     share_bundle,
     stamp_acceptance,
@@ -106,6 +108,9 @@ def review(
                 typer.echo(
                     f"\n[tokens: {u['input_tokens']} in / {u['output_tokens']} out on {result['model']}]"
                 )
+            shared = await maybe_autoshare(conn, cfg)
+            if shared:
+                typer.echo(shared)
         finally:
             await conn.close()
 
@@ -156,6 +161,48 @@ def grinder(
                 return
             await db.set_setting(conn, "grinder", description.strip()[:300])
             typer.echo(f"Grinder set to: {description.strip()}" if description.strip() else "Grinder cleared.")
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
+def autoshare(
+    state: Optional[str] = typer.Argument(None, help="on | off (omit to show current state)."),
+    yes: bool = typer.Option(False, "--yes", help="Accept the terms without the interactive prompt."),
+) -> None:
+    """Opt in/out of automatic sharing to the community pool after each review."""
+
+    async def _run() -> None:
+        cfg = _config()
+        conn = await db.connect(cfg.db_path)
+        try:
+            if state is None:
+                on = await db.get_bool_setting(conn, "autoshare", False)
+                if on:
+                    accepted = await db.get_setting(conn, "autoshare_accepted_at")
+                    typer.echo(f"Auto-share is ON (terms accepted {accepted}).")
+                else:
+                    typer.echo("Auto-share is OFF. `crema autoshare on` shows the terms and opts in.")
+                return
+            s = state.strip().lower()
+            if s == "off":
+                await db.set_setting(conn, "autoshare", "0")
+                typer.echo("Auto-share is OFF. Nothing will be shared unless you run `crema share`.")
+                return
+            if s != "on":
+                typer.echo("Usage: crema autoshare [on|off]")
+                raise typer.Exit(code=1)
+            typer.echo(SHARE_TERMS)
+            if not yes and not typer.confirm("Enable auto-share under these terms?"):
+                typer.echo("Auto-share stays OFF.")
+                return
+            await record_autoshare_consent(conn)
+            typer.echo(
+                "Auto-share is ON — a fresh snapshot uploads after each review. "
+                "`crema autoshare off` stops it any time."
+            )
         finally:
             await conn.close()
 

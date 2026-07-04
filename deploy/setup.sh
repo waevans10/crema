@@ -105,7 +105,19 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now crema-web.service crema-review.timer
 
-# --- 5. check + report ---
+# --- 5. optional: community shot pool opt-in ---
+echo
+echo "=== community shot pool (optional) ==="
+echo "crema can auto-share your anonymized shot data (telemetry + tasting notes,"
+echo "random install id, no personal details) to the community pool after each"
+echo "review — the dataset that helps everyone dial in. Strictly opt-in."
+read -r -p "Review the terms and decide now? [y/N] " POOL_ANSWER || POOL_ANSWER=""
+case "$POOL_ANSWER" in
+  y|Y|yes|YES) "$BIN" autoshare on || true ;;
+  *) echo "Skipped — opt in any time with: crema autoshare on" ;;
+esac
+
+# --- 6. check + report ---
 echo
 echo "=== connectivity check ==="
 "$BIN" doctor || true

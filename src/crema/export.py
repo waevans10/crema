@@ -47,6 +47,11 @@ opening a GitHub issue with your install id (shown by `crema export`). Raw
 submissions are then removed from the pool; data already included in a
 published dataset release stays licensed as released.
 
+Auto-share: if you enable it (`crema autoshare on`), a fresh snapshot is sent
+automatically after each review — no further prompts — until you run
+`crema autoshare off`. If these terms ever change, auto-share pauses until
+you re-accept.
+
 Run `crema export` first if you want to read exactly what leaves your box.\
 """
 
@@ -140,6 +145,56 @@ async def resolve_share_url(config: CremaConfig) -> Optional[str]:
     except aiohttp.ClientError:
         return None
     return url if url.startswith("https://") else None
+
+
+async def record_autoshare_consent(conn: aiosqlite.Connection) -> None:
+    """Store the opt-in: which terms version was accepted, and when.
+
+    Every auto-shared bundle is stamped with THIS stored consent (not a fresh
+    timestamp), so each object in the pool carries evidence of the actual
+    opt-in moment.
+    """
+    import datetime as _dt
+
+    await db.set_setting(conn, "autoshare", "1")
+    await db.set_setting(conn, "autoshare_terms_version", str(TERMS_VERSION))
+    await db.set_setting(
+        conn, "autoshare_accepted_at", _dt.datetime.now(_dt.timezone.utc).isoformat()
+    )
+
+
+async def maybe_autoshare(conn: aiosqlite.Connection, config: CremaConfig) -> Optional[str]:
+    """Auto-share a snapshot after a review, if (and only if) the barista opted in.
+
+    Best-effort: failures are reported as a message, never raised — a broken
+    pool endpoint must not break the review cycle. Returns a human-readable
+    status line, or None when auto-share is off / not applicable.
+    """
+    if not await db.get_bool_setting(conn, "autoshare", False):
+        return None
+    consent_version = await db.get_setting(conn, "autoshare_terms_version")
+    consent_at = await db.get_setting(conn, "autoshare_accepted_at")
+    if consent_version != str(TERMS_VERSION) or not consent_at:
+        return (
+            "auto-share paused: the sharing terms changed since you opted in — "
+            "run `crema autoshare on` to review and re-accept"
+        )
+    try:
+        share_url = await resolve_share_url(config)
+        if not share_url:
+            return None  # pool not live / sharing disabled by override
+        bundle = await build_export_bundle(conn, config)
+        if not bundle["shots"]:
+            return None
+        bundle["terms_version"] = TERMS_VERSION
+        bundle["terms_accepted_at"] = consent_at
+        await share_bundle(bundle, share_url)
+        return (
+            f"auto-shared {len(bundle['shots'])} shot(s) / {len(bundle['reviews'])} "
+            "review(s) to the community pool"
+        )
+    except Exception as e:  # noqa: BLE001 — never let sharing break the review
+        return f"auto-share failed (will retry after the next review): {e}"
 
 
 async def share_bundle(bundle: dict[str, Any], share_url: str) -> str:

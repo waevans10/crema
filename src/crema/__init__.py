@@ -1,3 +1,3 @@
-"""crema — automated GaggiMate shot reviewer powered by Claude."""
+"""crema — automated espresso shot reviewer powered by Claude."""
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"

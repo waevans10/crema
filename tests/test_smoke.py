@@ -397,3 +397,51 @@ def test_taste_vocab_defs_cover_all_chips():
     assert "tchip(this)" in chips and "astringent" in chips
     guide = _taste_guide_html()
     assert "SWEET SPOT" in guide and "over-steeped black tea" in guide
+
+
+def test_maybe_autoshare_gates_on_consent(tmp_path, monkeypatch):
+    """Off -> None; stale terms -> paused message (no upload); consented -> uploads
+    with the STORED acceptance stamp, not a fresh one."""
+    from crema import export as export_mod
+    from crema.config import CremaConfig
+    from crema.export import TERMS_VERSION, maybe_autoshare, record_autoshare_consent
+
+    sent: list[dict] = []
+
+    async def fake_share(bundle, url):
+        sent.append(bundle)
+        return "ok"
+
+    async def fake_resolve(cfg):
+        return "https://example.com/v1/bundles"
+
+    monkeypatch.setattr(export_mod, "share_bundle", fake_share)
+    monkeypatch.setattr(export_mod, "resolve_share_url", fake_resolve)
+
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            cfg = CremaConfig(db_path=tmp_path / "crema.db")
+            await crema_db.upsert_shot(conn, "000001", {"time": 28.0})
+
+            # Off by default: no upload, no message.
+            assert await maybe_autoshare(conn, cfg) is None
+
+            # On, but consent recorded for an older terms version: paused.
+            await crema_db.set_setting(conn, "autoshare", "1")
+            await crema_db.set_setting(conn, "autoshare_terms_version", "0")
+            await crema_db.set_setting(conn, "autoshare_accepted_at", "2026-01-01T00:00:00+00:00")
+            msg = await maybe_autoshare(conn, cfg)
+            assert msg is not None and "paused" in msg and not sent
+
+            # Proper opt-in: uploads, stamped with the stored consent moment.
+            await record_autoshare_consent(conn)
+            accepted = await crema_db.get_setting(conn, "autoshare_accepted_at")
+            msg = await maybe_autoshare(conn, cfg)
+            assert msg is not None and "auto-shared" in msg and len(sent) == 1
+            assert sent[0]["terms_version"] == TERMS_VERSION
+            assert sent[0]["terms_accepted_at"] == accepted
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
