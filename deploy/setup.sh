@@ -32,6 +32,9 @@ if ! grep -qE '^CREMA_WEB_PASSWORD=.+' .env; then
 fi
 grep -q '^CREMA_WEB_USER=' .env || echo 'CREMA_WEB_USER=crema' >> .env
 
+# --- lock down .env (holds the API key + web password) ---
+chmod 600 .env
+
 PORT="$(grep -E '^CREMA_PORT=' .env | cut -d= -f2)"; PORT="${PORT:-8765}"
 WEB_USER="$(grep -E '^CREMA_WEB_USER=' .env | cut -d= -f2)"; WEB_USER="${WEB_USER:-crema}"
 

@@ -10,8 +10,9 @@ from __future__ import annotations
 import html
 import secrets
 from typing import Any, Optional
+from urllib.parse import urlparse
 
-from fastapi import Depends, FastAPI, Form, HTTPException, status
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
@@ -41,7 +42,33 @@ def require_auth(credentials: Optional[HTTPBasicCredentials] = Depends(_security
         )
 
 
-app = FastAPI(title="crema", dependencies=[Depends(require_auth)])
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+def require_same_origin(request: Request) -> None:
+    """CSRF guard: state-changing requests must originate from this site.
+
+    Basic-auth credentials are auto-attached by the browser per-origin, so a
+    cross-site form POST could otherwise trigger a review or a profile push. We
+    require the Origin (or, failing that, Referer) host to match the request host
+    on unsafe methods. Same-origin form posts carry a matching Referer under the
+    default referrer policy; cross-site posts carry a mismatched Origin.
+    """
+    if request.method in _SAFE_METHODS:
+        return
+    host = (request.headers.get("host") or "").lower()
+    origin = request.headers.get("origin")
+    if origin is not None:
+        if urlparse(origin).netloc.lower() == host:
+            return
+    else:
+        referer = request.headers.get("referer")
+        if referer and urlparse(referer).netloc.lower() == host:
+            return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-origin request blocked")
+
+
+app = FastAPI(title="crema", dependencies=[Depends(require_auth), Depends(require_same_origin)])
 
 _STATUS_STYLE = {
     "draft": "#b5551d",
