@@ -169,6 +169,16 @@ def _redirect_error(exc: Exception) -> RedirectResponse:
     return RedirectResponse(f"/?error={quote(msg[:300])}", status_code=303)
 
 
+@app.exception_handler(404)
+@app.exception_handler(405)
+async def _to_home(request: Request, exc: Exception) -> RedirectResponse:
+    """A stray GET on an action route, or an unknown path, just goes to the report.
+
+    Keeps 401/403 untouched (different status codes) so auth still prompts and the
+    CSRF guard still blocks."""
+    return RedirectResponse("/", status_code=303)
+
+
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception) -> HTMLResponse:
     """Catch-all so an unexpected failure renders a page, not a bare 500."""
