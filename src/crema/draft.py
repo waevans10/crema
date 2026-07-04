@@ -77,7 +77,9 @@ async def draft_from_review(conn: aiosqlite.Connection, config: CremaConfig, rev
     client = AsyncAnthropic()
     response = await client.messages.parse(
         model=config.draft_model,
-        max_tokens=4096,
+        # Headroom for a full profile rewrite plus any thinking tokens (which
+        # count against max_tokens on adaptive-thinking models).
+        max_tokens=8192,
         system=DRAFT_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_draft_message(base_profile, review)}],
         output_format=DraftedProfile,

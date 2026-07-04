@@ -25,7 +25,10 @@ async def review_recent(conn: aiosqlite.Connection, config: CremaConfig) -> Opti
     client = AsyncAnthropic()
     response = await client.messages.parse(
         model=config.review_model,
-        max_tokens=2048,
+        # Generous budget: on models with adaptive thinking on by default
+        # (e.g. Sonnet 5) thinking tokens count against max_tokens, so a small
+        # cap stops the model mid-thought before the JSON is emitted.
+        max_tokens=8192,
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": build_user_message(shots)}],
         output_format=ReviewResult,
