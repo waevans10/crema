@@ -80,6 +80,13 @@ profile edit — only to pull new shots or push an approved edit back.
 Grind and dose/yield are suggested as text (manual bench changes); only profile
 changes get drafted and pushed.
 
+> [!NOTE]
+> **crema complements GaggiMate — it doesn't replace it.** You still brew from
+> the machine and use GaggiMate's own display and web UI for live shot graphs,
+> pressure/flow curves, and profile management. crema sits alongside, reading
+> the same shot history and adding an AI review layer on top: scores,
+> diagnoses, and suggested adjustments you approve back into the machine.
+
 ## How it works
 
 The GaggiMate machine only exposes its API on your **home network** (list/
@@ -236,7 +243,7 @@ All via `.env` (see [`.env.example`](.env.example)):
 | `CREMA_RETENTION_DAYS` | prune shots older than this (0 = keep all) | `30` |
 | `CREMA_AUTOREVIEW` | default for timer auto-review (UI toggle overrides) | `false` |
 | `CREMA_DISCORD_WEBHOOK_URL` | Discord webhook for shot score notifications | — |
-| `CREMA_WEB_USER` / `CREMA_WEB_PASSWORD` | web Basic auth (blank pw = open) | `crema` / — |
+| `CREMA_WEB_USER` / `CREMA_WEB_PASSWORD` | web login (blank pw = no login; password managers supported) | `crema` / — |
 | `CREMA_DB_PATH` | SQLite path | `./crema.db` |
 | `CREMA_HOST` / `CREMA_PORT` | web bind | `127.0.0.1` / `8765` |
 

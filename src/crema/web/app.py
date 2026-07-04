@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
+import hmac
 import html
 import secrets
 from pathlib import Path
@@ -32,22 +34,68 @@ from ..review import review_recent, review_shots
 _cfg = CremaConfig()
 _security = HTTPBasic(auto_error=False)
 
+# Session cookie signing key: random, persisted in the settings table so logins
+# survive service restarts. Loaded lazily on first use.
+_SESSION_COOKIE = "crema_session"
+_session_secret: Optional[bytes] = None
 
-def require_auth(credentials: Optional[HTTPBasicCredentials] = Depends(_security)) -> None:
-    """Gate all routes behind HTTP Basic auth when a web password is configured."""
-    if not _cfg.web_password:
-        return
-    valid = (
+
+async def _get_session_secret() -> bytes:
+    global _session_secret
+    if _session_secret is None:
+        conn = await db.connect(_cfg.db_path)
+        try:
+            stored = await db.get_setting(conn, "web_session_secret")
+            if not stored:
+                stored = secrets.token_hex(32)
+                await db.set_setting(conn, "web_session_secret", stored)
+        finally:
+            await conn.close()
+        _session_secret = bytes.fromhex(stored)
+    return _session_secret
+
+
+def _session_token(secret: bytes) -> str:
+    """Deterministic HMAC over the configured credentials — rotating the web
+    password (or the stored secret) invalidates existing sessions."""
+    msg = f"crema-session-v1:{_cfg.web_user}:{_cfg.web_password}".encode()
+    return hmac.new(secret, msg, hashlib.sha256).hexdigest()
+
+
+def _check_basic(credentials: Optional[HTTPBasicCredentials]) -> bool:
+    return (
         credentials is not None
         and secrets.compare_digest(credentials.username, _cfg.web_user)
         and secrets.compare_digest(credentials.password, _cfg.web_password)
     )
-    if not valid:
+
+
+# Paths reachable without auth (login page itself + the favicon it displays).
+_PUBLIC_PATHS = {"/login", "/icon.png"}
+
+
+async def require_auth(
+    request: Request,
+    credentials: Optional[HTTPBasicCredentials] = Depends(_security),
+) -> None:
+    """Gate routes behind a login-form session cookie (password-manager friendly).
+
+    HTTP Basic auth is still accepted in parallel so curl/scripts keep working.
+    No web password configured = auth disabled (loopback use).
+    """
+    if not _cfg.web_password or request.url.path in _PUBLIC_PATHS:
+        return
+    cookie = request.cookies.get(_SESSION_COOKIE)
+    if cookie and secrets.compare_digest(cookie, _session_token(await _get_session_secret())):
+        return
+    if _check_basic(credentials):
+        return
+    # Browsers get the login page; non-HTML clients get a plain 401.
+    if "text/html" in (request.headers.get("accept") or ""):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"Location": "/login"}
         )
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
 
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -166,11 +214,31 @@ textarea{font:inherit;color:var(--text);background:var(--surface-2);width:100%;
 textarea::placeholder{color:var(--muted);opacity:.8}
 label.ack{display:flex;align-items:center;gap:.45rem;font-size:.88rem;color:var(--lo);
   font-weight:600;margin:.2rem 0}
+details.sec>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:.45rem;
+  -webkit-user-select:none;user-select:none}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary::before{content:'▾';color:var(--muted);font-size:.8rem;transition:transform .12s}
+details.sec:not([open])>summary::before{transform:rotate(-90deg)}
+details.sec>summary h2{margin:1.8rem 0 .6rem;display:inline-block}
+details.sec:not([open])>summary h2{margin-bottom:.2rem}
+details.sub{margin:.5rem 0 0}
+details.sub>summary{list-style:none;cursor:pointer;color:var(--muted);font-size:.88rem;
+  font-weight:600;-webkit-user-select:none;user-select:none}
+details.sub>summary::-webkit-details-marker{display:none}
+details.sub>summary::before{content:'▸ '}
+details.sub[open]>summary::before{content:'▾ '}
+details.sub>summary:hover{color:var(--accent)}
 @media (max-width:640px){
+  .wrap{padding:1rem .75rem 3rem}
   header{flex-direction:column;align-items:flex-start;gap:.4rem}
-  .kv{grid-template-columns:1fr}
-  .kv .k{margin-top:.3rem}
+  h1{font-size:1.3rem}
+  .card{padding:.85rem .95rem}
+  .score{font-size:1.25rem;padding:.34rem .5rem}
+  .kv{grid-template-columns:1fr;gap:.05rem}
+  .kv .k{margin-top:.45rem}
   .shot{flex-direction:column;align-items:flex-start}
+  .btn{padding:.55rem 1rem}
+  pre{font-size:.82rem}
 }
 """
 
@@ -232,8 +300,9 @@ def _draft_form(review_id: int, profiles: list[dict[str, str]]) -> str:
     return (
         "<form method='post' action='/draft' style='margin-top:.8rem'>"
         f"<input type='hidden' name='review_id' value='{review_id}'>"
-        "<textarea name='notes' rows='2' placeholder='Optional notes for Claude — how it tasted, "
-        "what you want (e.g. came out sour; keep preinfusion under 6s)'></textarea>"
+        "<details class='sub'><summary>Add notes for Claude (optional)</summary>"
+        "<textarea name='notes' rows='2' style='margin-top:.4rem' placeholder='How it tasted, "
+        "what you want (e.g. came out sour; keep preinfusion under 6s)'></textarea></details>"
         f"<div class='row' style='margin-top:.5rem'>{picker}"
         "<button class='btn btn-sm' type='submit'>Draft a profile edit</button></div></form>"
     )
@@ -299,7 +368,8 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
       </div>
       <div class="k muted" style="font-weight:600;margin-top:.4rem">Profile changes</div>
       {changes_html}
-      <p class="muted" style="margin:.5rem 0 0">{html.escape(s.get('rationale', ''))}</p>
+      <details class="sub"><summary>Full reasoning</summary>
+        <p class="muted" style="margin:.3rem 0 0">{html.escape(s.get('rationale', ''))}</p></details>
       <p class="muted" style="font-size:.85rem;margin:.4rem 0 0">
         shot {html.escape(review['shot_id'])}{when} · {html.escape(review['model'])}</p>
       {draft_form}
@@ -354,14 +424,15 @@ def _render_edits(edits: list[dict[str, Any]]) -> str:
                 f"<button class='btn btn-sm btn-ghost' type='submit'>Discard</button></form>"
             )
             refine = (
-                f"<form method='post' action='/edits/{e['id']}/refine' style='margin-top:.7rem'>"
+                "<details class='sub'><summary>Refine this draft with notes</summary>"
+                f"<form method='post' action='/edits/{e['id']}/refine' style='margin-top:.4rem'>"
                 "<textarea name='notes' rows='2' required placeholder='Tell Claude what to change "
                 "before you approve — e.g. tasted bitter; keep the 9 bar peak; shorter preinfusion'>"
                 "</textarea>"
                 "<div class='row' style='margin-top:.4rem'>"
                 "<button class='btn btn-sm btn-ghost' type='submit'>Redraft with these notes</button>"
                 "<span class='muted' style='font-size:.82rem'>replaces this draft with a refined one</span>"
-                "</div></form>"
+                "</div></form></details>"
             )
         else:
             refine = ""
@@ -376,6 +447,12 @@ def _render_edits(edits: list[dict[str, Any]]) -> str:
             else:
                 actions = ""
         status_label = _EDIT_LABEL.get(e["status"], e["status"])
+        summary_pre = f"<pre>{html.escape(e['change_summary'])}</pre>"
+        if e["status"] != "draft":
+            # Historical edits: keep the page tight, changes one tap away.
+            summary_pre = (
+                f"<details class='sub'><summary>What changed</summary>{summary_pre}</details>"
+            )
         out.append(
             f"""<div class="card">
               <div class="row" style="justify-content:space-between">
@@ -383,7 +460,7 @@ def _render_edits(edits: list[dict[str, Any]]) -> str:
                   <b>Draft #{e['id']}</b>
                   <span class="muted">· based on {html.escape(e['base_profile_label'] or '—')} · {len(phases)} phase(s)</span></span>
               </div>
-              <pre>{html.escape(e['change_summary'])}</pre>
+              {summary_pre}
               {notes}{warn}
               <div class="row">{actions}</div>
               {refine}
@@ -488,6 +565,64 @@ async def icon() -> FileResponse:
     )
 
 
+def _login_page(error: str = "") -> str:
+    banner = f"<div class='banner error'>{html.escape(error)}</div>" if error else ""
+    return _page(f"""
+      <header style="justify-content:center;margin-top:3rem">
+        <span class="brand"><img src="/icon.png" alt="" width="32" height="32"><h1>crema</h1></span>
+      </header>
+      {banner}
+      <div class="card" style="max-width:22rem;margin:1rem auto">
+        <form method="post" action="/login">
+          <label class="muted" for="u" style="font-size:.88rem">Username</label>
+          <input id="u" name="username" type="text" autocomplete="username" required
+            style="width:100%;font:inherit;color:var(--text);background:var(--surface-2);
+            border:1px solid var(--border);border-radius:8px;padding:.5rem .6rem;margin:.2rem 0 .8rem">
+          <label class="muted" for="p" style="font-size:.88rem">Password</label>
+          <input id="p" name="password" type="password" autocomplete="current-password" required
+            style="width:100%;font:inherit;color:var(--text);background:var(--surface-2);
+            border:1px solid var(--border);border-radius:8px;padding:.5rem .6rem;margin:.2rem 0 1rem">
+          <button class="btn" type="submit" style="width:100%">Sign in</button>
+        </form>
+      </div>
+    """)
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_form() -> str:
+    if not _cfg.web_password:
+        # Auth disabled — nothing to log in to.
+        raise HTTPException(status_code=307, headers={"Location": "/"})
+    return _login_page()
+
+
+@app.post("/login")
+async def login(username: str = Form(...), password: str = Form(...)):
+    if not _cfg.web_password:
+        return RedirectResponse("/", status_code=303)
+    if not (
+        secrets.compare_digest(username, _cfg.web_user)
+        and secrets.compare_digest(password, _cfg.web_password)
+    ):
+        return HTMLResponse(_login_page("Wrong username or password."), status_code=401)
+    resp = RedirectResponse("/", status_code=303)
+    resp.set_cookie(
+        _SESSION_COOKIE,
+        _session_token(await _get_session_secret()),
+        max_age=60 * 60 * 24 * 30,  # 30 days
+        httponly=True,
+        samesite="lax",
+    )
+    return resp
+
+
+@app.post("/logout")
+async def logout() -> RedirectResponse:
+    resp = RedirectResponse("/login" if _cfg.web_password else "/", status_code=303)
+    resp.delete_cookie(_SESSION_COOKIE)
+    return resp
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
     conn = await db.connect(_cfg.db_path)
@@ -519,7 +654,8 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
       <header>
         <a class="brand" href="/"><img src="/icon.png" alt="" width="32" height="32">
           <h1>crema</h1></a>
-        <span class="row">{status_pill}<span class="muted" style="font-size:.82rem">{html.escape(host)}</span></span>
+        <span class="row">{status_pill}<span class="muted" style="font-size:.82rem">{html.escape(host)}</span>
+          {"<form method='post' action='/logout' class='inline'><button class='btn btn-sm btn-ghost' type='submit'>Sign out</button></form>" if _cfg.web_password else ""}</span>
       </header>
       <nav class="toc"><a href="#review">Latest review</a><a href="#edits">Profile edits</a><a href="#shots">Recent shots</a></nav>
       {banner}
@@ -536,9 +672,12 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
           border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
         <button class="btn btn-sm btn-ghost" type="submit">Save</button>
       </form>
-      <h2 id="review">Latest review</h2>{_render_review(review, _profiles_in_shots(shots))}
-      <h2 id="edits">Profile edits</h2>{_render_edits(edits)}
-      <h2 id="shots">Recent shots</h2>{_render_shots(shots)}
+      <details class="sec" open id="review"><summary><h2>Latest review</h2></summary>
+        {_render_review(review, _profiles_in_shots(shots))}</details>
+      <details class="sec" open id="edits"><summary><h2>Profile edits</h2></summary>
+        {_render_edits(edits)}</details>
+      <details class="sec" open id="shots"><summary><h2>Recent shots</h2></summary>
+        {_render_shots(shots)}</details>
     """
     return _page(body)
 
