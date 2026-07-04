@@ -10,19 +10,11 @@ in the three `deploy/*.service` / `*.timer` files if yours differ.
 
 ## 1. Get the project onto the Pi
 
-Clone from GitHub (the repo is private, so authenticate once). Easiest is the
-GitHub CLI:
+Clone from GitHub:
 
 ```bash
 ssh pi@<pi-host>
-sudo apt install -y gh git        # if not already present
-gh auth login                     # follow prompts (HTTPS, paste a token or use the browser code)
-gh repo clone waevans10/crema ~/crema
-```
-
-Or with plain git + a personal access token:
-
-```bash
+sudo apt install -y git            # if not already present
 git clone https://github.com/waevans10/crema.git ~/crema
 ```
 
@@ -49,6 +41,12 @@ uv sync                                             # creates ./.venv with the `
 cp .env.example .env
 nano .env    # set ANTHROPIC_API_KEY and GAGGIMATE_GAGGIMATE_HOST
 ```
+
+For `GAGGIMATE_GAGGIMATE_HOST`, give the machine a fixed address with a **DHCP
+reservation** on your router and use that IP — a plain DHCP address changes when
+the lease renews and crema loses the machine. `gaggimate.local` (mDNS) is fine on
+many networks but is unreliable on some, and won't resolve if the Pi and the
+machine are on different subnets.
 
 Pick a loopback port that's free on the Pi (default `8765` is uncommon; change
 `CREMA_PORT` if something already uses it). Confirm the Pi can reach the machine:

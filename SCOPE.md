@@ -128,11 +128,19 @@ human approval before a WS push.
 3. **Scheduling + rollups:** cron triggers, per-shot vs weekly-trend reviews, grind map.
 4. **Interactive chat:** wire the gaggimate-mcp MCP server for live Q&A.
 
-## Open questions
-- **Pi details:** model + OS (e.g. Pi 4 / Raspberry Pi OS), Python version, and is the
-  GaggiMate reachable from it as `gaggimate.local` or a fixed IP? (drives setup steps)
-- **Anthropic API key** available, and rough budget? (drives model choice + review
-  frequency)
-- **Fork gaggimate-mcp, or vendor** its parser/client modules into this repo?
-- Remote phone access wanted now, or LAN-only to start?
+## Resolved
+
+The questions that shaped the build, and how they landed:
+
+- **Pi details** — runs on a Raspberry Pi (armv7 / Raspberry Pi OS) with Python 3.13
+  installed via `uv` (Pi OS ships 3.11). The machine is reached by fixed IP; mDNS
+  (`gaggimate.local`) proved flaky.
+- **Anthropic API key + budget** — Claude via the Anthropic SDK, cost-gated to a
+  dollar or two a month (a review only runs on a genuinely new shot). Routine
+  reviews on `claude-sonnet-5`, profile drafting on `claude-opus-4-8`.
+- **Fork vs. vendor** — vendored `gaggimate-mcp`'s parser/client modules into
+  `src/gaggimate_mcp/` (see `_vendor_meta/`), so the `.slog` format isn't
+  reimplemented.
+- **Remote access** — LAN-only to start; an optional `cloudflared` tunnel over just
+  the web UI can be added later for off-network access.
 ```

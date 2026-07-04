@@ -236,7 +236,7 @@ async def get_review(db: aiosqlite.Connection, review_id: int) -> Optional[dict[
     return _review_row(row) if row else None
 
 
-# --- pending profile edits (Phase 2) ---
+# --- pending profile edits (drafted, awaiting approval) ---
 
 
 async def insert_pending_edit(

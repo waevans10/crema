@@ -9,6 +9,23 @@ ROOT="$(pwd)"
 USER_NAME="$(id -un)"
 BIN="$ROOT/.venv/bin/crema"
 
+cat <<'ART'
+
+        (  )   (   )  )
+         ) (   )  (  (
+         ( )  (    ) )
+         _____________
+        <_____________> ___
+        |             |/ _ \
+        |   crema     | | | |     GaggiMate shot reviewer
+        |             |_| |_|
+      __|_____________|\___/
+     /                 \___/ ___
+    /                       \/ _ \
+    \_______________________/_/ \_\
+
+ART
+
 [ -x "$BIN" ] || { echo "No .venv found — run 'uv sync' first."; exit 1; }
 [ -f .env ]   || { echo "No .env found — 'cp .env.example .env' and set your keys first."; exit 1; }
 

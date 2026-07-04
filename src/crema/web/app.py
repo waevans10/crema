@@ -11,6 +11,7 @@ Pure inline CSS, no JavaScript or external assets — light on the Pi.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import html
 import secrets
 from typing import Any, Optional
@@ -279,6 +280,21 @@ def _render_edits(edits: list[dict[str, Any]]) -> str:
     return "".join(out)
 
 
+def _fmt_shot_time(sh: dict[str, Any]) -> str:
+    """Human-readable local date + time for a shot, e.g. 'Fri Jul 04, 14:32'.
+
+    Uses the device capture time (unix seconds); falls back to the timestamp in
+    the transformed JSON, then to '—' when the machine had no clock set.
+    """
+    ts = sh.get("captured_at") or sh.get("transformed", {}).get("timestamp")
+    if not ts:
+        return "time unknown"
+    try:
+        return datetime.datetime.fromtimestamp(float(ts)).strftime("%a %b %d, %H:%M")
+    except (ValueError, OverflowError, OSError):
+        return "time unknown"
+
+
 def _render_shots(shots: list[dict[str, Any]]) -> str:
     if not shots:
         return "<div class='card muted'>No shots ingested yet.</div>"
@@ -288,7 +304,8 @@ def _render_shots(shots: list[dict[str, Any]]) -> str:
         rows.append(
             f"""<div class="card shot">
               <span class="meta"><b>Shot {html.escape(sh['id'])}</b>
-                <span class="muted">· {html.escape(str(t.get('profile_name', '—')))}
+                <span class="muted">· {html.escape(_fmt_shot_time(sh))}
+                · {html.escape(str(t.get('profile_name', '—')))}
                 · {html.escape(str(t.get('duration_seconds', '—')))}s
                 · {html.escape(str(t.get('final_weight_g', '—')))}g</span></span>
               <form method="post" action="/analyze" class="inline">
