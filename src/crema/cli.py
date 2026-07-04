@@ -64,8 +64,17 @@ def ingest() -> None:
 
 
 @app.command()
-def review() -> None:
-    """Ingest new shots, then run a Claude review of the recent window."""
+def review(
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Review even if no new shots came in (costs an API call)."
+    ),
+) -> None:
+    """Ingest new shots, then run a Claude review of the recent window.
+
+    To keep costs down, this skips the (paid) Claude call when no new shots were
+    ingested and a review already exists — so the scheduled timer only spends
+    money when you've actually pulled a shot. Use --force to review anyway.
+    """
 
     async def _run() -> None:
         cfg = _config()
@@ -73,11 +82,19 @@ def review() -> None:
         try:
             new_ids = await ingest_new_shots(conn, cfg)
             typer.echo(f"Ingested {len(new_ids)} new shot(s).")
+            if not new_ids and not force and await db.latest_review(conn) is not None:
+                typer.echo("No new shots since the last review — skipping (use --force to override).")
+                return
             result = await review_recent(conn, cfg)
             if result is None:
                 typer.echo("No shots available to review yet.")
                 return
             typer.echo(json.dumps(result["suggestions"], indent=2))
+            u = result.get("usage")
+            if u:
+                typer.echo(
+                    f"\n[tokens: {u['input_tokens']} in / {u['output_tokens']} out on {result['model']}]"
+                )
         finally:
             await conn.close()
 

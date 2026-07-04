@@ -191,7 +191,7 @@ async def _unhandled(request: Request, exc: Exception) -> HTMLResponse:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(error: Optional[str] = None) -> str:
+async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
     conn = await db.connect(_cfg.db_path)
     try:
         review = await db.latest_review(conn)
@@ -199,9 +199,11 @@ async def index(error: Optional[str] = None) -> str:
         edits = await db.list_pending_edits(conn, limit=10)
     finally:
         await conn.close()
-    banner = (
-        f"<div class='card' style='color:#c62828'>{html.escape(error)}</div>" if error else ""
-    )
+    banner = ""
+    if error:
+        banner += f"<div class='card' style='color:#c62828'>{html.escape(error)}</div>"
+    if note:
+        banner += f"<div class='card muted'>{html.escape(note)}</div>"
     shots_html = "".join(
         f"<div class='card'><span class='k'>Shot {html.escape(sh['id'])}</span> · "
         f"profile {html.escape(str(sh['transformed'].get('profile_name', '—')))} · "
@@ -223,7 +225,14 @@ async def index(error: Optional[str] = None) -> str:
 async def run_review() -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
-        await ingest_new_shots(conn, _cfg)
+        new_ids = await ingest_new_shots(conn, _cfg)
+        # Cost guard: don't pay to re-review unchanged shots. The timer already
+        # reviews each new shot, so the button is usually a no-op.
+        if not new_ids and await db.latest_review(conn) is not None:
+            return RedirectResponse(
+                "/?note=" + quote("No new shots since the last review — nothing to review."),
+                status_code=303,
+            )
         await review_recent(conn, _cfg)
     except Exception as e:  # noqa: BLE001 — surface to the user, don't 500
         return _redirect_error(e)

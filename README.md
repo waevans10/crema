@@ -72,6 +72,19 @@ The web UI binds to loopback by default. To reach it off-network, put a
 Cloudflare Tunnel (or similar) in front of *just the UI* — don't bind `0.0.0.0`
 without auth.
 
+## Cost
+
+crema only calls the paid Claude API when there's **a new shot to review**. The
+scheduled timer ingests every 15 min but skips the review unless a new shot came
+in, and the web "Run review" button does the same — so you pay per shot you
+actually pull, not per timer tick. A review is roughly a few cents; `crema review`
+prints the token count each time so you can see it.
+
+Levers if you want it cheaper: lower `CREMA_REVIEW_WINDOW` (fewer shots per
+review = fewer input tokens), or keep `CREMA_REVIEW_MODEL=claude-sonnet-5` (the
+cheap default) rather than an Opus model. Realistic use (a handful of shots a day)
+lands around a dollar or two a month, not a week.
+
 ## Scheduling
 
 Run `crema review` on a timer. Simplest is a systemd timer or cron on the Pi,
