@@ -46,6 +46,8 @@ export default {
       install_id?: unknown;
       shots?: unknown;
       reviews?: unknown;
+      terms_version?: unknown;
+      terms_accepted_at?: unknown;
     };
     const raw = await request.text();
     if (raw.length > MAX_BUNDLE_BYTES) {
@@ -69,6 +71,10 @@ export default {
     if (!Array.isArray(bundle.reviews)) {
       return json(400, { ok: false, error: "reviews must be a list" });
     }
+    // Every stored bundle must carry its own evidence of terms acceptance.
+    if (bundle.terms_version !== 1 || typeof bundle.terms_accepted_at !== "string") {
+      return json(400, { ok: false, error: "terms acceptance missing — share via `crema share`" });
+    }
 
     // One object per submission; re-shares just add a newer snapshot for the
     // same install, and curation dedupes offline.
@@ -78,6 +84,8 @@ export default {
         httpMetadata: { contentType: "application/json" },
         customMetadata: {
           schema_version: "1",
+          terms_version: String(bundle.terms_version),
+          terms_accepted_at: bundle.terms_accepted_at,
           shots: String(bundle.shots.length),
           reviews: String(bundle.reviews.length),
         },

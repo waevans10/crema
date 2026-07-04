@@ -18,7 +18,7 @@ from . import db
 from .config import CremaConfig
 from .doctor import run_checks
 from .draft import draft_from_review
-from .export import SHARE_TERMS, build_export_bundle, share_bundle
+from .export import SHARE_TERMS, build_export_bundle, share_bundle, stamp_acceptance
 from .ingest import ingest_new_shots
 from .push import discard_edit, push_edit
 from .review import review_recent, review_shots
@@ -179,6 +179,7 @@ def export(
         typer.echo(
             f"Wrote {len(bundle['shots'])} shots and {len(bundle['reviews'])} reviews to {path}."
         )
+        typer.echo(f"Install id: {bundle['install_id']} (quote this to request deletion from the pool).")
         typer.echo("Read it over — this is exactly what `crema share` would send.")
 
     asyncio.run(_run())
@@ -207,6 +208,7 @@ def share(
         if not bundle["shots"]:
             typer.echo("Nothing to share yet — no shots in the DB.")
             return
+        stamp_acceptance(bundle)
         reply = await share_bundle(bundle, cfg.share_url)
         typer.echo(
             f"Shared {len(bundle['shots'])} shots / {len(bundle['reviews'])} reviews. Server: {reply}"

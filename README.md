@@ -347,8 +347,18 @@ Plain-words terms: free-text fields (profile names, coffee, tasting notes) are
 included as you typed them, so read your export first. By sharing you grant the
 crema project a license to use the data **including commercially**; the pooled
 dataset is published for community use under **CC BY-NC 4.0**
-(non-commercial, attribution). The collection endpoint is a small Cloudflare
-Worker — see [`share-worker/`](share-worker/) to run your own.
+(non-commercial, attribution). Every shared bundle records which terms were
+accepted and when.
+
+**Withdrawal:** open a GitHub issue quoting your install id (shown by
+`crema export`) and your raw submissions are deleted from the pool. Data
+already included in a published dataset release stays licensed as released —
+that's the honest trade-off of a public dataset.
+
+The collection endpoint is a small Cloudflare Worker — see
+[`share-worker/`](share-worker/) to run your own. Shot telemetry is your own
+machine's measurement data; the pool never includes GaggiMate's shipped
+profiles or any of its (CC BY-NC-SA-licensed) code.
 
 ## Scheduling with cron (alternative)
 

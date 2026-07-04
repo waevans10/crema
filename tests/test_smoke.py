@@ -286,3 +286,14 @@ def test_export_bundle_shape_and_stable_install_id(tmp_path):
             await conn.close()
 
     asyncio.run(_run())
+
+
+def test_stamp_acceptance_records_terms_version_and_time():
+    from crema.export import TERMS_VERSION, stamp_acceptance
+
+    bundle = {"schema_version": 1}
+    out = stamp_acceptance(bundle)
+    assert out is bundle
+    assert bundle["terms_version"] == TERMS_VERSION
+    # ISO-8601 UTC timestamp.
+    assert "T" in bundle["terms_accepted_at"] and "+00:00" in bundle["terms_accepted_at"]

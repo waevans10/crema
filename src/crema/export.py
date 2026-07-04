@@ -24,6 +24,11 @@ from .config import CremaConfig
 
 SCHEMA_VERSION = 1
 
+# Bump when SHARE_TERMS changes materially. Stamped into every shared bundle
+# (with the acceptance time) so each stored submission carries its own
+# evidence of which terms were accepted.
+TERMS_VERSION = 1
+
 # What opting in means. Shown by `crema share` and must be accepted explicitly.
 SHARE_TERMS = """\
 Sharing sends this export bundle to the crema community shot pool:
@@ -37,8 +42,22 @@ license to use, modify, and redistribute this data, INCLUDING COMMERCIALLY.
 The pooled dataset is published for community use under CC BY-NC 4.0
 (non-commercial, attribution).
 
+Withdrawal: you can request deletion of your submitted bundles at any time by
+opening a GitHub issue with your install id (shown by `crema export`). Raw
+submissions are then removed from the pool; data already included in a
+published dataset release stays licensed as released.
+
 Run `crema export` first if you want to read exactly what leaves your box.\
 """
+
+
+def stamp_acceptance(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Record which terms were accepted, and when, inside the bundle itself."""
+    import datetime as _dt
+
+    bundle["terms_version"] = TERMS_VERSION
+    bundle["terms_accepted_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    return bundle
 
 
 async def get_install_id(conn: aiosqlite.Connection) -> str:
@@ -66,6 +85,9 @@ async def build_export_bundle(conn: aiosqlite.Connection, config: CremaConfig) -
     return {
         "schema_version": SCHEMA_VERSION,
         "install_id": install_id,
+        # Which machine platform produced the telemetry. Only GaggiMate today;
+        # recorded per bundle so future adapters pool cleanly alongside it.
+        "machine": "gaggimate",
         "grinder": grinder,
         "shots": [
             {
