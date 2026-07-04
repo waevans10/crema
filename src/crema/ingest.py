@@ -25,7 +25,13 @@ async def ingest_new_shots(conn: aiosqlite.Connection, config: CremaConfig, limi
     """Fetch up to `limit` recent shots, store any not already known.
 
     Returns the list of newly ingested (padded) shot ids, newest first.
+    Dispatches to the machine adapter selected by CREMA_MACHINE.
     """
+    if config.machine == "gaggiuino":
+        from .gaggiuino import ingest_new_shots_gaggiuino
+
+        return await ingest_new_shots_gaggiuino(conn, config, limit=limit)
+
     # Keep the DB bounded: drop shots older than the retention window.
     await db.prune_old(conn, config.retention_days)
 

@@ -261,8 +261,15 @@ def _pill(text: str, cls: str, dot: bool = False) -> str:
 
 async def _machine_status() -> tuple[bool, str]:
     """Fast reachability probe: a short TCP connect (not a request). 1.5s timeout."""
-    g = _cfg.gaggimate()
-    host, port = g.host, (443 if g.use_https else 80)
+    if _cfg.machine == "gaggiuino":
+        from urllib.parse import urlparse
+
+        parsed = urlparse(_cfg.gaggiuino_url)
+        host = parsed.hostname or "gaggiuino.local"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    else:
+        g = _cfg.gaggimate()
+        host, port = g.host, (443 if g.use_https else 80)
     try:
         _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=1.5)
         writer.close()
@@ -288,6 +295,11 @@ def _profiles_in_shots(shots: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 def _draft_form(review_id: int, profiles: list[dict[str, str]]) -> str:
     """Draft form: optional barista notes + profile picker when the window spans >1 profile."""
+    if _cfg.machine != "gaggimate":
+        return (
+            "<p class='muted' style='margin-top:.8rem'>Profile drafting is GaggiMate-only "
+            "for now — reviews, notes, and sharing all work on this machine.</p>"
+        )
     if len(profiles) > 1:
         options = "".join(
             f"<option value='{html.escape(p['id'])}'>{html.escape(p['name'])}</option>" for p in profiles

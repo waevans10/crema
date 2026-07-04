@@ -144,6 +144,12 @@ async def draft_from_review(
 
     Raises RuntimeError if the base profile can't be loaded or the draft is invalid.
     """
+    if config.machine != "gaggimate":
+        raise RuntimeError(
+            "Profile drafting is GaggiMate-only for now — reviews, notes, and "
+            f"sharing all work on '{config.machine}', but its profile-write API "
+            "isn't wired up yet."
+        )
     review = await db.get_review(conn, review_id)
     if review is None:
         raise RuntimeError(f"Review {review_id} not found.")

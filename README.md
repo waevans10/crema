@@ -330,6 +330,23 @@ deliberately turn auto-review on. Levers if you want it cheaper: lower
 model. You can also set a spend limit on your key in the
 [Anthropic Console](https://console.anthropic.com/) as a hard backstop.
 
+## Gaggiuino support (beta)
+
+crema can also ingest from a [Gaggiuino](https://gaggiuino.github.io/)-modded
+machine — set two lines in `.env`:
+
+```
+CREMA_MACHINE=gaggiuino
+CREMA_GAGGIUINO_URL=http://gaggiuino.local   # or its reserved IP
+```
+
+Shots are pulled from Gaggiuino's REST API and normalized (pressure/flow/
+weight/temperature curves, profile phases). Reviews, tasting notes, beans, and
+the community pool all work identically; **profile drafting/push-back is
+GaggiMate-only for now** (Gaggiuino's profile-write API isn't wired up yet —
+PRs welcome). Untested against real hardware so far: built from the API's
+published shapes, so reports from actual Gaggiuino machines are gold.
+
 ## Sharing shot data (opt-in)
 
 Every crema install quietly builds the dataset a trained espresso model would

@@ -36,19 +36,41 @@ async def run_checks(config: CremaConfig) -> list[Check]:
         )
     )
 
-    # 2. Device HTTP — the shot-history endpoint.
-    try:
-        idx = await GaggimateHTTPClient(config.gaggimate()).list_recent_shots(limit=1)
-        checks.append(Check("Device HTTP (shots)", True, f"reachable — {len(idx)} shot(s) in index"))
-    except Exception as e:  # noqa: BLE001 — report any failure verbatim
-        checks.append(Check("Device HTTP (shots)", False, str(e)))
+    # 2 & 3. Device checks, per machine adapter.
+    if config.machine == "gaggiuino":
+        import aiohttp
 
-    # 3. Device WebSocket — profile list (also the push-back channel).
-    try:
-        profiles = await GaggimateWebSocketClient(config.gaggimate()).list_profiles()
-        checks.append(Check("Device WebSocket (profiles)", True, f"reachable — {len(profiles)} profile(s)"))
-    except Exception as e:  # noqa: BLE001
-        checks.append(Check("Device WebSocket (profiles)", False, str(e)))
+        from .gaggiuino import _extract_latest_id, _get_json
+
+        base = config.gaggiuino_url.rstrip("/")
+        try:
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                latest = _extract_latest_id(await _get_json(session, f"{base}/api/shots/latest"))
+            checks.append(Check("Gaggiuino HTTP (shots)", True, f"reachable — latest shot id {latest}"))
+        except Exception as e:  # noqa: BLE001 — report any failure verbatim
+            checks.append(Check("Gaggiuino HTTP (shots)", False, str(e)))
+        checks.append(
+            Check(
+                "Profile push-back",
+                True,
+                "n/a on gaggiuino — reviews/notes/sharing only (drafting is GaggiMate-only)",
+            )
+        )
+    else:
+        # Device HTTP — the shot-history endpoint.
+        try:
+            idx = await GaggimateHTTPClient(config.gaggimate()).list_recent_shots(limit=1)
+            checks.append(Check("Device HTTP (shots)", True, f"reachable — {len(idx)} shot(s) in index"))
+        except Exception as e:  # noqa: BLE001 — report any failure verbatim
+            checks.append(Check("Device HTTP (shots)", False, str(e)))
+
+        # Device WebSocket — profile list (also the push-back channel).
+        try:
+            profiles = await GaggimateWebSocketClient(config.gaggimate()).list_profiles()
+            checks.append(Check("Device WebSocket (profiles)", True, f"reachable — {len(profiles)} profile(s)"))
+        except Exception as e:  # noqa: BLE001
+            checks.append(Check("Device WebSocket (profiles)", False, str(e)))
 
     # 4. Claude API — validate auth + model with a cheap GET (no generation cost).
     if key:

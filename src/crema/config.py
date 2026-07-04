@@ -37,6 +37,14 @@ class CremaConfig(BaseSettings):
 
     db_path: Path = Path("./crema.db")
 
+    # Which machine platform to ingest from: "gaggimate" (default) or
+    # "gaggiuino". Reviews/notes/beans/pool work for both; profile drafting
+    # and push-back are GaggiMate-only for now.
+    machine: str = "gaggimate"
+
+    # Base URL of the Gaggiuino web server (only used when machine=gaggiuino).
+    gaggiuino_url: str = "http://gaggiuino.local"
+
     # Claude models. Routine per-shot reviews run on the cheaper model; the
     # profile-drafting step escalates to the stronger one.
     review_model: str = "claude-sonnet-5"

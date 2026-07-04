@@ -305,3 +305,49 @@ def test_stamp_acceptance_records_terms_version_and_time():
     assert bundle["terms_version"] == TERMS_VERSION
     # ISO-8601 UTC timestamp.
     assert "T" in bundle["terms_accepted_at"] and "+00:00" in bundle["terms_accepted_at"]
+
+
+def test_gaggiuino_transform_normalizes_x10_and_downsamples():
+    """x10 fixed-point arrays become real units; long curves downsample to 24 pts."""
+    from crema.gaggiuino import CURVE_POINTS, transform_gaggiuino_shot
+
+    n = 300
+    shot = {
+        "id": 7,
+        "timestamp": 1731316192,
+        "duration": 315,  # 0.1s ticks -> 31.5s
+        "datapoints": {
+            "timeInShot": list(range(n)),
+            "pressure": [92] * n,          # 9.2 bar
+            "pumpFlow": [21] * n,          # 2.1 ml/s
+            "shotWeight": list(range(0, n * 2, 2)),  # ends at 598 -> 59.8g... use last
+            "temperature": [898] * n,      # 89.8 C
+            "targetTemperature": [900] * n,
+            "targetPressure": [90] * n,
+            "targetPumpFlow": [20] * n,
+        },
+        "profile": {"id": 8, "name": "_Long", "waterTemperature": 90, "phases": []},
+    }
+    t = transform_gaggiuino_shot(shot)
+    assert t["machine"] == "gaggiuino"
+    assert t["shot_id"] == "000007"
+    assert t["duration_seconds"] == 31.5
+    assert t["peak_pressure_bar"] == 9.2
+    assert t["avg_temperature_c"] == 89.8
+    assert t["avg_target_temperature_c"] == 90.0
+    assert t["avg_temp_deviation_c"] == -0.2
+    assert t["profile_name"] == "_Long"
+    assert t["final_weight_g"] == (n * 2 - 2) / 10
+    assert len(t["curves"]["pressure_bar"]) == CURVE_POINTS
+    assert t["curves"]["pressure_bar"][0] == 9.2
+
+
+def test_gaggiuino_extract_latest_id_handles_shapes():
+    from crema.gaggiuino import _extract_latest_id
+
+    assert _extract_latest_id([{"lastShotId": 42}]) == 42
+    assert _extract_latest_id({"lastShotId": "42"}) == 42
+    assert _extract_latest_id({"id": 7}) == 7
+    assert _extract_latest_id(13) == 13
+    assert _extract_latest_id([]) is None
+    assert _extract_latest_id({"nope": True}) is None
