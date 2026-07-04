@@ -12,9 +12,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dotenv import find_dotenv, load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from gaggimate_mcp.config import GaggimateConfig
+
+# Load .env into the process environment so the Anthropic SDK (which reads
+# ANTHROPIC_API_KEY from os.environ, not from our settings) picks it up. Search
+# from the current working directory — matching pydantic-settings' CWD-relative
+# env_file — so `.env` in the project root is found. Real env vars still win.
+load_dotenv(find_dotenv(usecwd=True))
 
 
 class CremaConfig(BaseSettings):

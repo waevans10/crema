@@ -16,6 +16,7 @@ from typing import Optional
 
 from . import db
 from .config import CremaConfig
+from .doctor import run_checks
 from .draft import draft_from_review
 from .ingest import ingest_new_shots
 from .push import discard_edit, push_edit
@@ -26,6 +27,24 @@ app = typer.Typer(add_completion=False, help="Automated GaggiMate shot reviewer.
 
 def _config() -> CremaConfig:
     return CremaConfig()
+
+
+@app.command()
+def doctor() -> None:
+    """Check device HTTP, device WebSocket, and Claude API connectivity."""
+
+    async def _run() -> None:
+        checks = await run_checks(_config())
+        for c in checks:
+            mark = "✓" if c.ok else "✗"
+            typer.echo(f"  {mark}  {c.name:28} {c.detail}")
+        if all(c.ok for c in checks):
+            typer.echo("\nAll good — crema can reach the machine and Claude.")
+        else:
+            typer.echo("\nSome checks failed (see above).")
+            raise typer.Exit(code=1)
+
+    asyncio.run(_run())
 
 
 @app.command()
