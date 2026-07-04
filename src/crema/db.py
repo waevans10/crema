@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,
     value  TEXT NOT NULL
 );
+
+-- Cached device profiles, captured during ingest so drafting works without the
+-- machine online (the machine is only needed to push an approved edit).
+CREATE TABLE IF NOT EXISTS profiles (
+    id          TEXT PRIMARY KEY,       -- device profile id
+    label       TEXT,
+    data        TEXT NOT NULL,          -- full profile JSON
+    updated_at  REAL NOT NULL DEFAULT (unixepoch('now'))
+);
 """
 
 
@@ -71,6 +80,26 @@ async def connect(db_path: Path) -> aiosqlite.Connection:
     await db.executescript(SCHEMA)
     await db.commit()
     return db
+
+
+async def upsert_profile(
+    db: aiosqlite.Connection, profile_id: str, label: Optional[str], data: dict[str, Any]
+) -> None:
+    """Cache a device profile's full JSON for offline drafting."""
+    await db.execute(
+        "INSERT INTO profiles (id, label, data, updated_at) VALUES (?, ?, ?, unixepoch('now')) "
+        "ON CONFLICT(id) DO UPDATE SET label=excluded.label, data=excluded.data, "
+        "updated_at=excluded.updated_at",
+        (profile_id, label, json.dumps(data)),
+    )
+    await db.commit()
+
+
+async def get_profile(db: aiosqlite.Connection, profile_id: str) -> Optional[dict[str, Any]]:
+    """Return a cached profile's full JSON, or None if not cached."""
+    async with db.execute("SELECT data FROM profiles WHERE id = ?", (profile_id,)) as cur:
+        row = await cur.fetchone()
+    return json.loads(row["data"]) if row else None
 
 
 async def get_setting(db: aiosqlite.Connection, key: str) -> Optional[str]:

@@ -77,12 +77,25 @@ async def draft_from_review(
         raise RuntimeError(
             "Can't draft: no profile selected and the reviewed shot has no profile_id."
         )
+    profile_id = str(profile_id)
 
-    ws = GaggimateWebSocketClient(config.gaggimate())
-    base_profile = await ws.load_profile(str(profile_id))
+    # Prefer the profile cached during ingest — this lets drafting work with the
+    # machine off. Only reach out to the machine if we've never cached it.
+    base_profile = await db.get_profile(conn, profile_id)
+    if base_profile is None:
+        try:
+            ws = GaggimateWebSocketClient(config.gaggimate())
+            base_profile = await ws.load_profile(profile_id)
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(
+                f"Profile {profile_id} isn't cached yet and the machine can't be reached "
+                "to load it. Turn the machine on and run a review/ingest once to cache it."
+            ) from e
+        if base_profile:
+            await db.upsert_profile(conn, profile_id, base_profile.get("label"), base_profile)
     if not base_profile:
-        raise RuntimeError(f"Base profile {profile_id} could not be loaded from the machine.")
-    base_label = base_profile.get("label") or base_profile.get("name") or str(profile_id)
+        raise RuntimeError(f"Base profile {profile_id} could not be loaded.")
+    base_label = base_profile.get("label") or base_profile.get("name") or profile_id
 
     client = AsyncAnthropic()
     response = await client.messages.parse(
