@@ -8,10 +8,12 @@ pushing profile edits back is Phase 2.
 from __future__ import annotations
 
 import html
-from typing import Any
+import secrets
+from typing import Any, Optional
 
-from fastapi import FastAPI, Form
+from fastapi import Depends, FastAPI, Form, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from .. import db
 from ..config import CremaConfig
@@ -20,8 +22,26 @@ from ..ingest import ingest_new_shots
 from ..push import discard_edit, push_edit
 from ..review import review_recent
 
-app = FastAPI(title="crema")
 _cfg = CremaConfig()
+_security = HTTPBasic(auto_error=False)
+
+
+def require_auth(credentials: Optional[HTTPBasicCredentials] = Depends(_security)) -> None:
+    """Gate all routes behind HTTP Basic auth when a web password is configured."""
+    if not _cfg.web_password:
+        return  # auth disabled (loopback default)
+    valid = credentials is not None and secrets.compare_digest(
+        credentials.username, _cfg.web_user
+    ) and secrets.compare_digest(credentials.password, _cfg.web_password)
+    if not valid:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+
+
+app = FastAPI(title="crema", dependencies=[Depends(require_auth)])
 
 _STATUS_STYLE = {
     "draft": "#b5551d",

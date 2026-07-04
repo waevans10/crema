@@ -45,10 +45,15 @@ class CremaConfig(BaseSettings):
     # How many recent shots to include as context in a single review.
     review_window: int = 5
 
-    # Web UI bind. Default to loopback — expose remotely with a tunnel, never by
-    # binding 0.0.0.0 without auth in front of it.
+    # Web UI bind. 127.0.0.1 = loopback (view via SSH tunnel); 0.0.0.0 = reachable
+    # on the LAN. If you bind to the LAN, set a web password below.
     host: str = "127.0.0.1"
     port: int = 8765
+
+    # Optional HTTP Basic auth for the web UI. Empty password = no auth (fine for
+    # loopback). Set a password when binding to the LAN.
+    web_user: str = "crema"
+    web_password: str = ""
 
     def gaggimate(self) -> GaggimateConfig:
         """Build the vendored device config (reads its own GAGGIMATE_* env vars)."""
