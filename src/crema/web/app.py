@@ -496,6 +496,7 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         shots = await db.recent_shots(conn, limit=_cfg.review_window)
         edits = await db.list_pending_edits(conn, limit=10)
         autoreview = await db.get_bool_setting(conn, "autoreview", _cfg.autoreview)
+        grinder = (await db.get_setting(conn, "grinder")) or _cfg.grinder
     finally:
         await conn.close()
     auto_pill = _pill(f"auto-review {'on' if autoreview else 'off'}", "c-ok" if autoreview else "c-muted", dot=True)
@@ -527,6 +528,14 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
           <button class="btn" type="submit" title="Pull new shots off the machine and review them">Review new shots</button></form>
         {auto_pill}{auto_toggle}
       </div>
+      <form method="post" action="/grinder" class="row" style="margin-top:.6rem">
+        <label class="muted" style="font-size:.88rem" for="grinder">Grinder</label>
+        <input id="grinder" name="grinder" type="text" value="{html.escape(grinder)}"
+          placeholder="e.g. Eureka Mignon Specialità, stepless — helps tailor grind advice"
+          style="flex:1;min-width:14rem;font:inherit;color:var(--text);background:var(--surface-2);
+          border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
+        <button class="btn btn-sm btn-ghost" type="submit">Save</button>
+      </form>
       <h2 id="review">Latest review</h2>{_render_review(review, _profiles_in_shots(shots))}
       <h2 id="edits">Profile edits</h2>{_render_edits(edits)}
       <h2 id="shots">Recent shots</h2>{_render_shots(shots)}
@@ -560,6 +569,18 @@ async def toggle_autoreview(on: str = Form(...)) -> RedirectResponse:
     finally:
         await conn.close()
     return RedirectResponse("/", status_code=303)
+
+
+@app.post("/grinder")
+async def set_grinder(grinder: str = Form("")) -> RedirectResponse:
+    """Save the grinder description used to tailor grind advice in reviews."""
+    conn = await db.connect(_cfg.db_path)
+    try:
+        await db.set_setting(conn, "grinder", grinder.strip()[:300])
+    finally:
+        await conn.close()
+    note = "Grinder saved — future reviews will phrase grind advice for it." if grinder.strip() else "Grinder cleared."
+    return RedirectResponse("/?note=" + quote(note), status_code=303)
 
 
 @app.post("/analyze")

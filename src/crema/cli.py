@@ -132,6 +132,30 @@ def autoreview(
 
 
 @app.command()
+def grinder(
+    description: Optional[str] = typer.Argument(
+        None, help='Your grinder, in your own words (omit to show the current setting). Pass "" to clear.'
+    ),
+) -> None:
+    """Describe your grinder so reviews give grind advice in its own steps/clicks."""
+
+    async def _run() -> None:
+        cfg = _config()
+        conn = await db.connect(cfg.db_path)
+        try:
+            if description is None:
+                current = (await db.get_setting(conn, "grinder")) or cfg.grinder
+                typer.echo(f"Grinder: {current}" if current else "No grinder set.")
+                return
+            await db.set_setting(conn, "grinder", description.strip()[:300])
+            typer.echo(f"Grinder set to: {description.strip()}" if description.strip() else "Grinder cleared.")
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
 def analyze(shot_id: str = typer.Argument(..., help="Shot id to analyze (e.g. 000091).")) -> None:
     """Run a Claude review of one specific shot."""
 

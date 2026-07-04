@@ -41,6 +41,10 @@ async def _review(
     if not shots:
         return None
 
+    # The barista's grinder description (set via UI/CLI, env default) lets Claude
+    # phrase grind advice in that grinder's own steps/clicks/numbers.
+    grinder = (await db.get_setting(conn, "grinder")) or config.grinder or None
+
     client = AsyncAnthropic()
     response = await client.messages.parse(
         model=config.review_model,
@@ -49,7 +53,7 @@ async def _review(
         # cap stops the model mid-thought before the JSON is emitted.
         max_tokens=8192,
         system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": build_user_message(shots)}],
+        messages=[{"role": "user", "content": build_user_message(shots, grinder=grinder)}],
         output_format=ReviewResult,
     )
 

@@ -45,6 +45,12 @@ class CremaConfig(BaseSettings):
     # How many recent shots to include as context in a single review.
     review_window: int = 5
 
+    # Your grinder, described in your own words ("Eureka Mignon Specialità,
+    # stepless" / "1Zpresso JX-Pro, 30 clicks per rotation"). Lets reviews give
+    # grind advice in that grinder's own steps/clicks. The UI/CLI setting
+    # (stored in the DB) overrides this env default once set.
+    grinder: str = ""
+
     # Whether the scheduled timer auto-reviews new shots. This is the *default*;
     # the UI/CLI toggle (stored in the DB) overrides it once set. Off by default so
     # nothing spends automatically until you turn it on.

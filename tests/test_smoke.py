@@ -102,6 +102,12 @@ def test_build_draft_message_includes_notes_and_previous_draft():
     assert "PREVIOUS DRAFT" in msg and "raised temp" in msg
 
 
+def test_build_user_message_includes_grinder_when_set():
+    shots = [{"id": "1", "transformed": {}}]
+    assert "GRINDER: Niche Zero" in build_user_message(shots, grinder="Niche Zero")
+    assert "GRINDER" not in build_user_message(shots)
+
+
 def test_fmt_qty_handles_missing_values():
     assert _fmt_qty(44.2, "s") == "44.2s"
     assert _fmt_qty(None, "g") == "—"  # the old code rendered "Noneg"

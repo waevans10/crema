@@ -35,9 +35,12 @@ different grinds), and say so explicitly in its reason.
 
 Be concrete and specific: name the direction and rough magnitude of each change \
 ("grind 1–2 steps finer", "drop brew temperature ~1°C", "extend the pre-infusion \
-phase by ~2s"). Stay within safe bounds (temperature 25–100°C, pressure 0–12 bar). \
-If the shots already look good, say so and suggest nothing. Never invent data that \
-isn't in the telemetry.
+phase by ~2s"). If a GRINDER is described, give grind changes in that grinder's own \
+terms — its steps, clicks, numbers, or rotation marks, and respect whether it's \
+stepped or stepless; if no grinder is described, use generic "steps on a typical \
+stepped grinder" language. Stay within safe bounds (temperature 25–100°C, pressure \
+0–12 bar). If the shots already look good, say so and suggest nothing. Never invent \
+data that isn't in the telemetry.
 
 Also give the most recent shot a 1-10 quality score: 1-3 badly flawed (gushing, \
 choked, severe channeling), 4-6 drinkable but clearly off, 7-8 good, 9-10 dialled \
@@ -177,10 +180,12 @@ def build_draft_message(
     return "\n\n".join(parts)
 
 
-def build_user_message(shots: list[dict[str, Any]]) -> str:
+def build_user_message(shots: list[dict[str, Any]], grinder: Optional[str] = None) -> str:
     """Render the recent-shots context into the user turn.
 
     `shots` is newest-first; we label them so Claude knows the ordering.
+    `grinder` is the barista's free-text description of their grinder, so grind
+    advice can be given in that grinder's own steps/clicks/numbers.
     """
     if not shots:
         return "No shots are available to review."
@@ -188,6 +193,8 @@ def build_user_message(shots: list[dict[str, Any]]) -> str:
         f"Here are the {len(shots)} most recent shots, newest first. "
         "Review them and recommend adjustments for the next shot.\n"
     ]
+    if grinder:
+        lines.append(f"GRINDER: {grinder}\n")
     for idx, shot in enumerate(shots):
         label = "most recent" if idx == 0 else f"{idx} shot(s) earlier"
         lines.append(f"=== Shot {shot['id']} ({label}) ===")
