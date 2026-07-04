@@ -351,3 +351,18 @@ def test_gaggiuino_extract_latest_id_handles_shapes():
     assert _extract_latest_id(13) == 13
     assert _extract_latest_id([]) is None
     assert _extract_latest_id({"nope": True}) is None
+
+
+def test_resolve_share_url_override_and_off_switch(tmp_path):
+    """Explicit CREMA_SHARE_URL wins (no network); 'off' disables sharing."""
+    from crema.config import CremaConfig
+    from crema.export import resolve_share_url
+
+    async def _run() -> None:
+        cfg = CremaConfig(db_path=tmp_path / "x.db", share_url="https://example.com/v1/bundles")
+        assert await resolve_share_url(cfg) == "https://example.com/v1/bundles"
+        for off in ("off", "OFF", "none", "disabled"):
+            cfg = CremaConfig(db_path=tmp_path / "x.db", share_url=off)
+            assert await resolve_share_url(cfg) is None
+
+    asyncio.run(_run())

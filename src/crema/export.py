@@ -111,6 +111,37 @@ async def build_export_bundle(conn: aiosqlite.Connection, config: CremaConfig) -
     }
 
 
+# Where `crema share` discovers the current pool endpoint. A pointer in the
+# repo — not a baked-in URL — so the Worker can move accounts/domains freely:
+# updating this file redirects every install ever shipped, old versions too.
+# The repo is already the project's trust root (users run its code), so the
+# pointer adds no new trust surface. CREMA_SHARE_URL overrides it entirely.
+POOL_URL_POINTER = "https://raw.githubusercontent.com/waevans10/crema/main/.pool-url"
+
+
+async def resolve_share_url(config: CremaConfig) -> Optional[str]:
+    """The pool endpoint: explicit CREMA_SHARE_URL, else the repo pointer.
+
+    Returns None when sharing isn't available (pointer missing/empty — the
+    pool isn't live yet). Only https endpoints are accepted.
+    """
+    if config.share_url.strip().lower() in ("off", "none", "disabled"):
+        return None
+    if config.share_url:
+        return config.share_url
+    timeout = aiohttp.ClientTimeout(total=15)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(POOL_URL_POINTER) as resp:
+                if resp.status != 200:
+                    return None
+                text = (await resp.text()).strip()
+                url = text.splitlines()[0].strip() if text else ""
+    except aiohttp.ClientError:
+        return None
+    return url if url.startswith("https://") else None
+
+
 async def share_bundle(bundle: dict[str, Any], share_url: str) -> str:
     """POST the bundle to the community pool endpoint. Returns the server's reply."""
     timeout = aiohttp.ClientTimeout(total=60)

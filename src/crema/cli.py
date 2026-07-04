@@ -18,7 +18,13 @@ from . import db
 from .config import CremaConfig
 from .doctor import run_checks
 from .draft import draft_from_review
-from .export import SHARE_TERMS, build_export_bundle, share_bundle, stamp_acceptance
+from .export import (
+    SHARE_TERMS,
+    build_export_bundle,
+    resolve_share_url,
+    share_bundle,
+    stamp_acceptance,
+)
 from .ingest import ingest_new_shots
 from .push import discard_edit, push_edit
 from .review import review_recent, review_shots
@@ -193,8 +199,12 @@ def share(
 
     async def _run() -> None:
         cfg = _config()
-        if not cfg.share_url:
-            typer.echo("Sharing is not configured (CREMA_SHARE_URL is empty).")
+        share_url = await resolve_share_url(cfg)
+        if not share_url:
+            typer.echo(
+                "The community pool isn't live yet (and no CREMA_SHARE_URL override is set). "
+                "Watch the repo — sharing will work without any setup once it is."
+            )
             raise typer.Exit(1)
         typer.echo(SHARE_TERMS)
         if not yes and not typer.confirm("Share your bundle under these terms?"):
@@ -209,7 +219,7 @@ def share(
             typer.echo("Nothing to share yet — no shots in the DB.")
             return
         stamp_acceptance(bundle)
-        reply = await share_bundle(bundle, cfg.share_url)
+        reply = await share_bundle(bundle, share_url)
         typer.echo(
             f"Shared {len(bundle['shots'])} shots / {len(bundle['reviews'])} reviews. Server: {reply}"
         )

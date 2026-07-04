@@ -357,8 +357,11 @@ theirs, that dataset exists for the first time. Strictly opt-in:
   telemetry, beans, tasting notes, and the reviews' advice, identified only by
   a random install UUID. Read it: it is exactly what sharing would send.
 - `crema share` shows the terms and asks for confirmation **every time**, then
-  sends the bundle to the community pool. Nothing is ever shared automatically,
-  and an empty `CREMA_SHARE_URL` disables sharing entirely.
+  sends the bundle to the community pool. Nothing is ever shared automatically.
+  The pool endpoint is discovered from a pointer file in this repo (`.pool-url`),
+  so sharing needs zero setup and the endpoint can move without breaking old
+  installs; set `CREMA_SHARE_URL` to use a self-hosted pool, or to `off` to
+  disable sharing entirely.
 
 Plain-words terms: free-text fields (profile names, coffee, tasting notes) are
 included as you typed them, so read your export first. By sharing you grant the
