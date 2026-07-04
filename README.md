@@ -33,6 +33,18 @@ The binary parsing and device API clients are vendored from the MIT-licensed
 `src/gaggimate_mcp/` (see its `_vendor_meta/`), so crema doesn't reimplement the
 `.slog` format.
 
+## License & credits
+
+crema is released under the [MIT License](./LICENSE).
+
+Credits:
+- [`gaggimate-mcp`](https://github.com/julianleopold/gaggimate-mcp) by
+  julianleopold (MIT) — vendored for the `.slog` parser, device HTTP/WebSocket
+  clients, and shot transformer.
+- [GaggiMate](https://gaggimate.eu/) by jniebuhr — the open-source smart-controller
+  project this works with. "GaggiMate" and "Gaggia" are used descriptively; crema
+  is an independent project and is not affiliated with or endorsed by either.
+
 ## Setup
 
 Requires Python 3.13+. On the Pi:
