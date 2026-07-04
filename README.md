@@ -23,9 +23,13 @@ _Add a screenshot of the web report here — see [`docs/SCREENSHOTS.md`](docs/SC
 
 - A **GaggiMate**-controlled espresso machine, reachable on your home network
   (its API is LAN-only — see [How it works](#how-it-works)).
-- An **always-on computer on the same network** to run crema. A Raspberry Pi is
-  the intended target, but any always-on Linux/macOS box works.
-- **Python 3.13+**.
+- A separate **always-on computer on the same network** to run crema — a
+  Raspberry Pi (3 / 4 / 5, or Zero 2 W) is ideal, but any always-on Linux or
+  macOS machine works. **This is _not_ the espresso machine's controller:** crema
+  needs Python and a real operating system, so it can't run on the GaggiMate's
+  ESP32 board or an Arduino — it runs on its own little computer alongside the
+  machine.
+- **Python 3.13+** on that computer.
 - A **paid Anthropic API account** for Claude — this is what does the reviewing
   (see [Which LLM](#which-llm)). **This costs real money: you pay Anthropic
   directly, per shot reviewed.** It's cheap for home use (roughly a dollar or two
@@ -95,33 +99,61 @@ bean description. crema fills a different niche — **unattended and self-hosted
 
 ## Quickstart
 
-Requires Python 3.13+. From the project directory:
+Run these on your always-on box (the Pi or a PC/Mac) — **not** on the espresso
+machine. This gets crema working by hand; to run it 24/7, see
+[Running it unattended on a Pi](#running-it-unattended-on-a-pi).
+
+**1. Get the code.**
 
 ```bash
-cp .env.example .env      # then edit: ANTHROPIC_API_KEY + GAGGIMATE_GAGGIMATE_HOST
-uv sync                   # or: pip install -e .
+git clone https://github.com/waevans10/crema.git
+cd crema
 ```
 
-Set `GAGGIMATE_GAGGIMATE_HOST` to the machine's address. **Recommended:** give it
-a fixed IP with a DHCP reservation on your router (a plain DHCP address changes on
-reconnect and crema will lose the machine). `gaggimate.local` works with zero
-config on many networks, but not all — and never across subnets. Confirm the box
-can reach it (`ping gaggimate.local`, or `ping <the IP>`), then:
+**2. Install [uv](https://docs.astral.sh/uv/)** — it manages Python 3.13 and the
+dependencies for you. Skip if you already have it:
 
 ```bash
-crema doctor              # check device + Claude connectivity
-crema ingest              # pull new shots (also prunes shots past the retention window)
-crema review              # ingest + review (only spends on new shots, only if autoreview on)
-crema serve               # web report at http://127.0.0.1:8765
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Open the report, click **Run review**, and you'll get a scored review with
-suggestions. To run crema unattended on a Raspberry Pi (systemd units, a
-LAN-bound password-protected web report), see
-[`deploy/PI_SETUP.md`](deploy/PI_SETUP.md) — or run the one-shot
-[`deploy/setup.sh`](deploy/setup.sh) from the project root.
+(On a Raspberry Pi, `uv` also installs Python 3.13 for you — Pi OS ships 3.11.
+Prefer your own Python 3.13? Use `pip install -e .` and drop the `uv run` prefix
+from the commands below.)
+
+**3. Configure.**
+
+```bash
+cp .env.example .env
+nano .env          # set ANTHROPIC_API_KEY and GAGGIMATE_GAGGIMATE_HOST
+```
+
+For `GAGGIMATE_GAGGIMATE_HOST`, use the machine's address. **Recommended:** give
+it a fixed IP with a DHCP reservation on your router — a plain DHCP address
+changes on reconnect and crema will lose the machine. `gaggimate.local` works on
+many networks but not all, and never across subnets.
+
+**4. Install dependencies and check the connections.**
+
+```bash
+uv sync                    # creates .venv with the `crema` command
+uv run crema doctor        # verifies it can reach the machine + Claude
+```
+
+**5. Pull shots, review them, and open the report.**
+
+```bash
+uv run crema ingest        # pull new shots off the machine
+uv run crema review        # send recent shots to Claude for a scored review
+uv run crema serve         # web report at http://127.0.0.1:8765
+```
+
+Open `http://127.0.0.1:8765` and click **Run review** to review on demand.
 
 ### All commands
+
+Run each as `uv run crema <command>` (or activate the venv once with
+`source .venv/bin/activate`, then just `crema <command>`):
 
 ```bash
 crema doctor              # check device + Claude connectivity
@@ -135,6 +167,22 @@ crema discard EDIT_ID     # discard a drafted edit
 crema autoreview [on|off] # toggle automatic review of new shots by the timer
 crema serve               # web report at http://127.0.0.1:8765
 ```
+
+## Running it unattended on a Pi
+
+After steps 1–4 above, one script installs everything so crema reviews on a timer
+and keeps the web report always up:
+
+```bash
+uv run crema doctor        # confirm it works first
+bash deploy/setup.sh       # installs systemd services: 15-min review timer + web report
+```
+
+`deploy/setup.sh` binds the web report to your LAN, generates a password for it,
+and starts everything on boot (it asks for `sudo` where it needs it — run it as
+your normal user, not with `sudo`). For the full walkthrough, including how to
+view the report from your laptop over SSH, see
+[`deploy/PI_SETUP.md`](deploy/PI_SETUP.md).
 
 ## Which LLM
 
@@ -236,11 +284,11 @@ deliberately turn auto-review on. Levers if you want it cheaper: lower
 model. You can also set a spend limit on your key in the
 [Anthropic Console](https://console.anthropic.com/) as a hard backstop.
 
-## Scheduling
+## Scheduling with cron (alternative)
 
-On a Pi, [`deploy/setup.sh`](deploy/setup.sh) installs a systemd timer that runs
-`crema review` every 15 minutes plus an always-on web service — see
-[`deploy/PI_SETUP.md`](deploy/PI_SETUP.md). If you'd rather use cron:
+[Running it unattended on a Pi](#running-it-unattended-on-a-pi) uses systemd
+(installed by `deploy/setup.sh`). If you'd rather use cron instead, run a review
+every 15 minutes with:
 
 ```
 */15 * * * * cd /home/pi/crema && /home/pi/crema/.venv/bin/crema review >> crema.log 2>&1
