@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import datetime
 
-from crema.draft import _clamp, _to_device_phase
+from crema.draft import _clamp, _to_device_phase, diff_stop_conditions
 from crema.prompts import (
     DraftedProfile,
     ReviewResult,
+    build_draft_message,
     build_user_message,
 )
-from crema.web.app import _fmt_shot_time
+from crema.web.app import _fmt_qty, _fmt_shot_time
 
 
 def test_build_user_message_no_shots():
@@ -67,6 +68,43 @@ def test_clamp_bounds():
     assert _clamp(5.0, 0.0, 10.0) == 5.0
     assert _clamp(-3.0, 0.0, 10.0) == 0.0
     assert _clamp(99.0, 0.0, 10.0) == 10.0
+
+
+def test_diff_stop_conditions_flags_changes_and_ignores_identical():
+    """Stop-condition changes must be detected so the UI can force acknowledgement."""
+    base = {
+        "phases": [
+            {"name": "Preinfusion", "targets": [{"type": "pumped", "operator": "gte", "value": 60}]},
+            {"name": "Extraction", "targets": [{"type": "volumetric", "operator": "gte", "value": 36}]},
+        ]
+    }
+    identical = [dict(p) for p in base["phases"]]
+    assert diff_stop_conditions(base, identical) == []
+
+    changed = [
+        {"name": "Preinfusion", "targets": []},
+        {"name": "Extraction", "targets": [{"type": "volumetric", "operator": "gte", "value": 40}]},
+    ]
+    out = diff_stop_conditions(base, changed)
+    assert any("removed stop" in c for c in out)
+    assert any("36 → 40" in c for c in out)
+
+
+def test_build_draft_message_includes_notes_and_previous_draft():
+    base = {"label": "P", "phases": []}
+    review = {"suggestions": {"diagnosis": "d"}}
+    msg = build_draft_message(
+        base, review,
+        user_notes="tasted sour, keep preinfusion under 6s",
+        previous_draft={"profile": {"label": "P"}, "change_summary": "raised temp"},
+    )
+    assert "BARISTA NOTES" in msg and "tasted sour" in msg
+    assert "PREVIOUS DRAFT" in msg and "raised temp" in msg
+
+
+def test_fmt_qty_handles_missing_values():
+    assert _fmt_qty(44.2, "s") == "44.2s"
+    assert _fmt_qty(None, "g") == "—"  # the old code rendered "Noneg"
 
 
 def test_to_device_phase_clamps_unsafe_values():

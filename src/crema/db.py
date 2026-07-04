@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS pending_edits (
     status             TEXT NOT NULL DEFAULT 'draft',  -- draft|pushed|discarded|failed
     device_profile_id  TEXT,                   -- id returned by the device after push
     error              TEXT,
+    notes              TEXT,                   -- barista notes given to Claude for this draft
+    stop_changes       TEXT,                   -- JSON list: stop-condition changes vs base (must be acknowledged)
     created_at         REAL NOT NULL DEFAULT (unixepoch('now')),
     updated_at         REAL NOT NULL DEFAULT (unixepoch('now')),
     FOREIGN KEY (review_id) REFERENCES reviews(id)
@@ -78,8 +80,22 @@ async def connect(db_path: Path) -> aiosqlite.Connection:
     await db.execute("PRAGMA journal_mode=WAL;")
     await db.execute("PRAGMA foreign_keys=ON;")
     await db.executescript(SCHEMA)
+    await _migrate(db)
     await db.commit()
     return db
+
+
+async def _migrate(db: aiosqlite.Connection) -> None:
+    """Additive column migrations for DBs created before a column existed."""
+    async with db.execute("PRAGMA table_info(pending_edits)") as cur:
+        cols = {row["name"] async for row in cur}
+    if "notes" not in cols:
+        # Barista notes given to Claude when drafting/refining this edit.
+        await db.execute("ALTER TABLE pending_edits ADD COLUMN notes TEXT")
+    if "stop_changes" not in cols:
+        # JSON list of human-readable stop-condition changes vs the base profile;
+        # non-empty means the user must explicitly acknowledge before pushing.
+        await db.execute("ALTER TABLE pending_edits ADD COLUMN stop_changes TEXT")
 
 
 async def upsert_profile(
@@ -247,13 +263,25 @@ async def insert_pending_edit(
     review_id: Optional[int] = None,
     base_profile_id: Optional[str] = None,
     base_profile_label: Optional[str] = None,
+    notes: Optional[str] = None,
+    stop_changes: Optional[list[str]] = None,
 ) -> int:
     """Store a drafted profile edit (status 'draft') and return its id."""
     cur = await db.execute(
         "INSERT INTO pending_edits "
-        "(review_id, base_profile_id, base_profile_label, label, change_summary, profile_json) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (review_id, base_profile_id, base_profile_label, label, change_summary, json.dumps(profile)),
+        "(review_id, base_profile_id, base_profile_label, label, change_summary, profile_json, "
+        " notes, stop_changes) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            review_id,
+            base_profile_id,
+            base_profile_label,
+            label,
+            change_summary,
+            json.dumps(profile),
+            notes,
+            json.dumps(stop_changes) if stop_changes else None,
+        ),
     )
     await db.commit()
     return int(cur.lastrowid)
@@ -272,6 +300,8 @@ def _edit_row(row: aiosqlite.Row) -> dict[str, Any]:
         "device_profile_id": row["device_profile_id"],
         "error": row["error"],
         "created_at": row["created_at"],
+        "notes": row["notes"],
+        "stop_changes": json.loads(row["stop_changes"]) if row["stop_changes"] else [],
     }
 
 

@@ -85,6 +85,15 @@ Rules:
 specific values the review calls for. Do not drop, reorder, or invent phases.
 - Only make changes the review's profile_changes justify. Grind and dose/yield are \
 manual bench changes, NOT profile edits — ignore them here.
+- NEVER change, add, or remove a phase's stop conditions (the targets array — \
+volumetric/pumped/pressure/flow stops) unless the review's profile_changes or the \
+barista's notes explicitly ask for it. The barista relies on these to end the shot \
+(by water volume, weight, or flow); carry them over exactly as-is by default. Any \
+stop-condition change you do make is flagged to the barista for explicit approval.
+- If BARISTA NOTES are provided, honor them within the safe bounds below — they come \
+from the person tasting the coffee and take precedence over the review's suggestions \
+where the two conflict. If a note asks for something outside safe bounds, get as \
+close as the bounds allow and say so in change_summary.
 - Stay in safe bounds: water/phase temperature 60–96°C, pump pressure 0–12 bar, flow \
 ≥ 0, each phase duration > 0 and ≤ 120s. Phase type is 'preinfusion' or 'brew'.
 - Keep the label the same as the current profile (the system appends an "[AI]" marker \
@@ -129,15 +138,36 @@ class DraftedProfile(BaseModel):
     phases: list[DraftPhase] = Field(description="Every phase of the profile, in order.")
 
 
-def build_draft_message(base_profile: dict[str, Any], review: dict[str, Any]) -> str:
-    """Render the current profile + review suggestions into the drafting user turn."""
-    return (
+def build_draft_message(
+    base_profile: dict[str, Any],
+    review: dict[str, Any],
+    user_notes: Optional[str] = None,
+    previous_draft: Optional[dict[str, Any]] = None,
+) -> str:
+    """Render the current profile + review suggestions into the drafting user turn.
+
+    `user_notes` carries the barista's own feedback (taste, preferences, constraints).
+    `previous_draft` is a prior pending edit being refined — Claude should treat it
+    as the starting point and adjust it per the notes, not start over.
+    """
+    parts = [
         "CURRENT PROFILE (the machine ran this):\n"
-        + json.dumps(base_profile, indent=2, default=str)
-        + "\n\nREVIEW SUGGESTIONS to implement (profile_changes only):\n"
-        + json.dumps(review["suggestions"], indent=2, default=str)
-        + "\n\nReturn the complete modified profile."
-    )
+        + json.dumps(base_profile, indent=2, default=str),
+        "REVIEW SUGGESTIONS to implement (profile_changes only):\n"
+        + json.dumps(review["suggestions"], indent=2, default=str),
+    ]
+    if previous_draft is not None:
+        parts.append(
+            "PREVIOUS DRAFT (your earlier attempt — refine THIS per the barista notes, "
+            "keeping its other changes intact):\n"
+            + json.dumps(previous_draft.get("profile", {}), indent=2, default=str)
+            + "\nIts change summary was:\n"
+            + str(previous_draft.get("change_summary", ""))
+        )
+    if user_notes:
+        parts.append("BARISTA NOTES (from the human tasting the coffee):\n" + user_notes)
+    parts.append("Return the complete modified profile.")
+    return "\n\n".join(parts)
 
 
 def build_user_message(shots: list[dict[str, Any]]) -> str:

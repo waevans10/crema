@@ -32,6 +32,63 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
+_OP = {"gte": "≥", "lte": "≤"}
+
+
+def _fmt_target(t: dict[str, Any]) -> str:
+    return f"{t.get('type', '?')} {_OP.get(str(t.get('operator')), t.get('operator', '?'))} {t.get('value', '?')}"
+
+
+def diff_stop_conditions(
+    base_profile: dict[str, Any], drafted_phases: list[dict[str, Any]]
+) -> list[str]:
+    """Human-readable list of stop-condition (targets) changes vs the base profile.
+
+    Stop conditions decide when a phase — and often the whole shot — ends (by
+    volume pumped, flow, or pressure). Changing them silently would change how the
+    barista's shots terminate, so any difference found here is surfaced in the UI
+    and must be explicitly acknowledged before the edit can be pushed.
+    """
+    changes: list[str] = []
+    base_phases = base_profile.get("phases") or []
+    for i in range(max(len(base_phases), len(drafted_phases))):
+        base_ph = base_phases[i] if i < len(base_phases) else {}
+        new_ph = drafted_phases[i] if i < len(drafted_phases) else {}
+        name = new_ph.get("name") or base_ph.get("name") or f"phase {i + 1}"
+        old_ts = list(base_ph.get("targets") or [])
+        new_ts = list(new_ph.get("targets") or [])
+        old = [_fmt_target(t) for t in old_ts]
+        new = [_fmt_target(t) for t in new_ts]
+        if old == new:
+            continue
+        # Pair up same-kind stops (type+operator) whose value changed, for a
+        # cleaner "36 → 40" line; report the rest as added/removed.
+        old_left, new_left = old.copy(), new.copy()
+        for ot in old_ts:
+            for nt in new_ts:
+                if (
+                    ot.get("type") == nt.get("type")
+                    and ot.get("operator") == nt.get("operator")
+                    and ot.get("value") != nt.get("value")
+                    and _fmt_target(ot) in old_left
+                    and _fmt_target(nt) in new_left
+                ):
+                    changes.append(
+                        f"{name}: stop {ot.get('type')} "
+                        f"{_OP.get(str(ot.get('operator')), '?')} {ot.get('value')} → {nt.get('value')}"
+                    )
+                    old_left.remove(_fmt_target(ot))
+                    new_left.remove(_fmt_target(nt))
+                    break
+        for t in new_left:
+            if t not in old_left:
+                changes.append(f"{name}: added stop {t}")
+        for t in old_left:
+            if t not in new_left:
+                changes.append(f"{name}: removed stop {t}")
+    return changes
+
+
 def _to_device_phase(phase: Any) -> dict[str, Any]:
     """Map a DraftPhase to a device profile phase dict, clamping to safe bounds."""
     p: dict[str, Any] = {
@@ -57,6 +114,8 @@ async def draft_from_review(
     config: CremaConfig,
     review_id: int,
     profile_id: Optional[str] = None,
+    user_notes: Optional[str] = None,
+    refine_edit_id: Optional[int] = None,
 ) -> dict[str, Any]:
     """Draft a profile edit for a stored review. Returns the pending-edit dict.
 
@@ -64,11 +123,24 @@ async def draft_from_review(
     reviewed shots span several profiles. If omitted, the profile the review's
     newest shot ran on is used.
 
+    `user_notes` is the barista's own feedback (taste, preferences, constraints),
+    passed to Claude alongside the review. `refine_edit_id` refines an existing
+    draft: that edit's profile is given to Claude as the starting point and the
+    old draft is discarded once the new one is stored.
+
     Raises RuntimeError if the base profile can't be loaded or the draft is invalid.
     """
     review = await db.get_review(conn, review_id)
     if review is None:
         raise RuntimeError(f"Review {review_id} not found.")
+
+    previous: Optional[dict[str, Any]] = None
+    if refine_edit_id is not None:
+        previous = await db.get_pending_edit(conn, refine_edit_id)
+        if previous is None or previous["status"] != "draft":
+            raise RuntimeError(f"Edit {refine_edit_id} is not an awaiting-approval draft.")
+        # Refine against the same base profile the draft was built on.
+        profile_id = profile_id or previous["base_profile_id"]
 
     if not profile_id:
         shot = await db.get_shot(conn, review["shot_id"])
@@ -104,7 +176,14 @@ async def draft_from_review(
         # count against max_tokens on adaptive-thinking models).
         max_tokens=8192,
         system=DRAFT_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": build_draft_message(base_profile, review)}],
+        messages=[
+            {
+                "role": "user",
+                "content": build_draft_message(
+                    base_profile, review, user_notes=user_notes, previous_draft=previous
+                ),
+            }
+        ],
         output_format=DraftedProfile,
     )
     drafted = response.parsed_output
@@ -133,6 +212,10 @@ async def draft_from_review(
         "temperature": temperature,
         "phases": phases,
     }
+    # Stop conditions decide when the shot ends — never let a draft change them
+    # silently. Any difference vs the base profile is stored on the edit and must
+    # be explicitly acknowledged in the UI before the edit can be pushed.
+    stop_changes = diff_stop_conditions(base_profile, phases)
     edit_id = await db.insert_pending_edit(
         conn,
         label=profile_json["label"],
@@ -141,7 +224,12 @@ async def draft_from_review(
         review_id=review_id,
         base_profile_id=str(profile_id),
         base_profile_label=base_label,
+        notes=user_notes,
+        stop_changes=stop_changes,
     )
+    if previous is not None:
+        # The refined draft supersedes the old one.
+        await db.set_edit_status(conn, previous["id"], "discarded")
     edit = await db.get_pending_edit(conn, edit_id)
     assert edit is not None
     return edit

@@ -14,11 +14,12 @@ import asyncio
 import datetime
 import html
 import secrets
+from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import quote, urlparse
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from .. import db
@@ -144,14 +145,45 @@ pre{background:var(--surface-2);border:1px solid var(--border);border-radius:10p
   background:var(--surface)}
 .banner.error{border-color:var(--off);color:var(--off)}
 .banner.note{border-color:var(--muted);color:var(--muted)}
+.banner.warn{border-color:var(--lo);color:var(--lo);background:var(--surface)}
+.banner.warn ul{margin:.3rem 0 0;padding-left:1.2rem}
 .shot{display:flex;align-items:center;justify-content:space-between;gap:.8rem}
 .shot .meta{min-width:0}
 form.inline{display:inline;margin:0}
+.brand{display:flex;align-items:center;gap:.65rem;text-decoration:none;color:inherit}
+.brand img{width:32px;height:32px;border-radius:9px;display:block}
+nav.toc{display:flex;gap:1rem;margin:.2rem 0 0;font-size:.85rem}
+nav.toc a{color:var(--muted);text-decoration:none;font-weight:600}
+nav.toc a:hover{color:var(--accent)}
+.score{display:inline-flex;align-items:baseline;gap:.15rem;font-weight:800;
+  font-size:1.5rem;line-height:1;padding:.42rem .6rem;border-radius:12px;
+  border:1px solid color-mix(in srgb,currentColor 35%,transparent);
+  background:color-mix(in srgb,currentColor 12%,transparent)}
+.score small{font-size:.72rem;font-weight:700;opacity:.75}
+.review-top{display:flex;gap:.9rem;align-items:flex-start}
+textarea{font:inherit;color:var(--text);background:var(--surface-2);width:100%;
+  border:1px solid var(--border);border-radius:8px;padding:.45rem .6rem;resize:vertical}
+textarea::placeholder{color:var(--muted);opacity:.8}
+label.ack{display:flex;align-items:center;gap:.45rem;font-size:.88rem;color:var(--lo);
+  font-weight:600;margin:.2rem 0}
+@media (max-width:640px){
+  header{flex-direction:column;align-items:flex-start;gap:.4rem}
+  .kv{grid-template-columns:1fr}
+  .kv .k{margin-top:.3rem}
+  .shot{flex-direction:column;align-items:flex-start}
+}
 """
 
 
 def _page(body: str) -> str:
-    return f"<style>{_CSS}</style><div class='wrap'>{body}</div>"
+    return (
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>crema · shot report</title>"
+        "<link rel='icon' type='image/png' href='/icon.png'>"
+        "<link rel='apple-touch-icon' href='/icon.png'>"
+        f"<style>{_CSS}</style></head><body><div class='wrap'>{body}</div></body></html>"
+    )
 
 
 def _pill(text: str, cls: str, dot: bool = False) -> str:
@@ -187,7 +219,7 @@ def _profiles_in_shots(shots: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 def _draft_form(review_id: int, profiles: list[dict[str, str]]) -> str:
-    """Draft button, with a profile picker when the window spans >1 profile."""
+    """Draft form: optional barista notes + profile picker when the window spans >1 profile."""
     if len(profiles) > 1:
         options = "".join(
             f"<option value='{html.escape(p['id'])}'>{html.escape(p['name'])}</option>" for p in profiles
@@ -198,18 +230,41 @@ def _draft_form(review_id: int, profiles: list[dict[str, str]]) -> str:
     else:
         picker = ""
     return (
-        "<form method='post' action='/draft' class='row' style='margin-top:.8rem'>"
+        "<form method='post' action='/draft' style='margin-top:.8rem'>"
         f"<input type='hidden' name='review_id' value='{review_id}'>"
-        f"{picker}<button class='btn btn-sm' type='submit'>Draft profile edit</button></form>"
+        "<textarea name='notes' rows='2' placeholder='Optional notes for Claude — how it tasted, "
+        "what you want (e.g. came out sour; keep preinfusion under 6s)'></textarea>"
+        f"<div class='row' style='margin-top:.5rem'>{picker}"
+        "<button class='btn btn-sm' type='submit'>Draft a profile edit</button></div></form>"
     )
 
 
 _CONF_CLS = {"low": "c-lo", "medium": "c-mid", "high": "c-hi"}
 
 
+def _fmt_ts(ts: Any) -> str:
+    """Unix seconds → 'Sat Jul 04, 08:15' in local time, or '' when unknown."""
+    if not ts:
+        return ""
+    try:
+        return datetime.datetime.fromtimestamp(float(ts)).strftime("%a %b %d, %H:%M")
+    except (ValueError, OverflowError, OSError):
+        return ""
+
+
+def _score_badge(score: Any) -> str:
+    """The review's 1-10 shot score as a colored badge (red/amber/green bands)."""
+    try:
+        n = int(score)
+    except (TypeError, ValueError):
+        return ""
+    cls = "c-off" if n <= 3 else "c-lo" if n <= 6 else "c-hi"
+    return f"<span class='score {cls}' title='Shot quality score'>{n}<small>/10</small></span>"
+
+
 def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, str]]) -> str:
     if review is None:
-        return "<div class='card muted'>No review yet — click <b>Run review</b> after pulling a shot.</div>"
+        return "<div class='card muted'>No review yet — click <b>Review new shots</b> after pulling a shot.</div>"
     s = review["suggestions"]
     conf = str(s.get("confidence", ""))
     changes = s.get("profile_changes") or []
@@ -222,10 +277,17 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
         ) + "</ul>"
     else:
         changes_html = "<p class='muted'>No profile changes suggested.</p>"
+    reviewed_at = _fmt_ts(review.get("created_at"))
+    when = f" · reviewed {html.escape(reviewed_at)}" if reviewed_at else ""
     return f"""<div class="card">
-      <div class="row" style="justify-content:space-between">
-        <span class="lead">{html.escape(s.get('diagnosis', ''))}</span>
-        {_pill(conf + ' confidence', _CONF_CLS.get(conf, 'c-muted')) if conf else ''}
+      <div class="review-top">
+        {_score_badge(s.get('score'))}
+        <div style="flex:1;min-width:0">
+          <div class="row" style="justify-content:space-between">
+            <span class="lead">{html.escape(s.get('diagnosis', ''))}</span>
+            {_pill(conf + ' confidence', _CONF_CLS.get(conf, 'c-muted')) if conf else ''}
+          </div>
+        </div>
       </div>
       <div class="kv">
         <span class="k">Grind</span><span>{html.escape(s.get('grind_change', ''))}</span>
@@ -235,12 +297,30 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
       {changes_html}
       <p class="muted" style="margin:.5rem 0 0">{html.escape(s.get('rationale', ''))}</p>
       <p class="muted" style="font-size:.85rem;margin:.4rem 0 0">
-        {html.escape(review['model'])} · newest shot {html.escape(review['shot_id'])}</p>
+        shot {html.escape(review['shot_id'])}{when} · {html.escape(review['model'])}</p>
       {_draft_form(review['id'], profiles)}
     </div>"""
 
 
 _EDIT_PILL = {"draft": "c-accent", "pushed": "c-hi", "discarded": "c-muted", "failed": "c-off"}
+_EDIT_LABEL = {
+    "draft": "awaiting approval",
+    "pushed": "pushed to machine",
+    "discarded": "discarded",
+    "failed": "push failed",
+}
+
+
+def _stop_warning(e: dict[str, Any]) -> str:
+    """Explicit disclosure when a draft changes the shot's stop conditions."""
+    if not e.get("stop_changes"):
+        return ""
+    items = "".join(f"<li>{html.escape(c)}</li>" for c in e["stop_changes"])
+    return (
+        "<div class='banner warn'><b>This draft changes when the shot stops.</b> "
+        "Stop conditions (volume / flow / pressure targets) differ from the base profile:"
+        f"<ul>{items}</ul></div>"
+    )
 
 
 def _render_edits(edits: list[dict[str, Any]]) -> str:
@@ -249,32 +329,60 @@ def _render_edits(edits: list[dict[str, Any]]) -> str:
     out = []
     for e in edits:
         phases = e["profile"].get("phases", [])
+        warn = _stop_warning(e) if e["status"] == "draft" else ""
+        notes = (
+            f"<p class='muted' style='font-size:.88rem;margin:.4rem 0 0'>Your notes: "
+            f"{html.escape(e['notes'])}</p>"
+            if e.get("notes")
+            else ""
+        )
         if e["status"] == "draft":
+            ack = (
+                "<label class='ack'><input type='checkbox' name='ack' value='1' required> "
+                "I've reviewed the stop-condition changes above</label>"
+                if e.get("stop_changes")
+                else ""
+            )
             actions = (
-                f"<form method='post' action='/edits/{e['id']}/push' class='inline'>"
+                f"<form method='post' action='/edits/{e['id']}/push' class='inline'>{ack}"
                 f"<button class='btn btn-sm' type='submit'>Approve &amp; push</button></form> "
                 f"<form method='post' action='/edits/{e['id']}/discard' class='inline'>"
                 f"<button class='btn btn-sm btn-ghost' type='submit'>Discard</button></form>"
             )
-        elif e["status"] == "pushed":
-            did = f" (id {html.escape(e['device_profile_id'])})" if e["device_profile_id"] else ""
-            actions = (
-                f"<p class='muted' style='margin:.5rem 0 0'>Saved to machine as "
-                f"<code>{html.escape(e['label'])} [AI]</code>{did} — select it on the machine to use it.</p>"
+            refine = (
+                f"<form method='post' action='/edits/{e['id']}/refine' style='margin-top:.7rem'>"
+                "<textarea name='notes' rows='2' required placeholder='Tell Claude what to change "
+                "before you approve — e.g. tasted bitter; keep the 9 bar peak; shorter preinfusion'>"
+                "</textarea>"
+                "<div class='row' style='margin-top:.4rem'>"
+                "<button class='btn btn-sm btn-ghost' type='submit'>Redraft with these notes</button>"
+                "<span class='muted' style='font-size:.82rem'>replaces this draft with a refined one</span>"
+                "</div></form>"
             )
-        elif e["status"] == "failed":
-            actions = f"<p class='c-off' style='margin:.5rem 0 0'>Push failed: {html.escape(e['error'] or '')}</p>"
         else:
-            actions = ""
+            refine = ""
+            if e["status"] == "pushed":
+                did = f" (id {html.escape(e['device_profile_id'])})" if e["device_profile_id"] else ""
+                actions = (
+                    f"<p class='muted' style='margin:.5rem 0 0'>Saved to machine as "
+                    f"<code>{html.escape(e['label'])} [AI]</code>{did} — select it on the machine to use it.</p>"
+                )
+            elif e["status"] == "failed":
+                actions = f"<p class='c-off' style='margin:.5rem 0 0'>Push failed: {html.escape(e['error'] or '')}</p>"
+            else:
+                actions = ""
+        status_label = _EDIT_LABEL.get(e["status"], e["status"])
         out.append(
             f"""<div class="card">
               <div class="row" style="justify-content:space-between">
-                <span>{_pill(e['status'], _EDIT_PILL.get(e['status'], 'c-muted'))}
-                  <b>Edit #{e['id']}</b>
-                  <span class="muted">· base {html.escape(e['base_profile_label'] or '—')} · {len(phases)} phase(s)</span></span>
+                <span>{_pill(status_label, _EDIT_PILL.get(e['status'], 'c-muted'))}
+                  <b>Draft #{e['id']}</b>
+                  <span class="muted">· based on {html.escape(e['base_profile_label'] or '—')} · {len(phases)} phase(s)</span></span>
               </div>
               <pre>{html.escape(e['change_summary'])}</pre>
+              {notes}{warn}
               <div class="row">{actions}</div>
+              {refine}
             </div>"""
         )
     return "".join(out)
@@ -295,6 +403,13 @@ def _fmt_shot_time(sh: dict[str, Any]) -> str:
         return "time unknown"
 
 
+def _fmt_qty(value: Any, suffix: str) -> str:
+    """'49.3s' / '44.4g', or an em-dash when the value is missing."""
+    if value is None or value == "":
+        return "—"
+    return f"{value}{suffix}"
+
+
 def _render_shots(shots: list[dict[str, Any]]) -> str:
     if not shots:
         return "<div class='card muted'>No shots ingested yet.</div>"
@@ -305,12 +420,12 @@ def _render_shots(shots: list[dict[str, Any]]) -> str:
             f"""<div class="card shot">
               <span class="meta"><b>Shot {html.escape(sh['id'])}</b>
                 <span class="muted">· {html.escape(_fmt_shot_time(sh))}
-                · {html.escape(str(t.get('profile_name', '—')))}
-                · {html.escape(str(t.get('duration_seconds', '—')))}s
-                · {html.escape(str(t.get('final_weight_g', '—')))}g</span></span>
+                · {html.escape(str(t.get('profile_name') or '—'))}
+                · {html.escape(_fmt_qty(t.get('duration_seconds'), 's'))}
+                · {html.escape(_fmt_qty(t.get('final_weight_g'), 'g'))}</span></span>
               <form method="post" action="/analyze" class="inline">
                 <input type="hidden" name="shot_id" value="{html.escape(sh['id'])}">
-                <button class="btn btn-sm btn-ghost" type="submit">Analyze</button>
+                <button class="btn btn-sm btn-ghost" type="submit">Review this shot</button>
               </form>
             </div>"""
         )
@@ -357,6 +472,18 @@ async def _unhandled(request: Request, exc: Exception) -> HTMLResponse:
 # --------------------------------------------------------------------------- #
 
 
+_ICON_PATH = Path(__file__).parent / "icon.png"
+
+
+@app.get("/icon.png", include_in_schema=False)
+async def icon() -> FileResponse:
+    """The crema mug icon (favicon + header logo). Cached hard — it never changes."""
+    return FileResponse(
+        _ICON_PATH, media_type="image/png",
+        headers={"Cache-Control": "public, max-age=604800, immutable"},
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
     conn = await db.connect(_cfg.db_path)
@@ -371,7 +498,8 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
     auto_toggle = (
         f"<form method='post' action='/autoreview' class='inline'>"
         f"<input type='hidden' name='on' value='{0 if autoreview else 1}'>"
-        f"<button class='btn btn-sm btn-ghost' type='submit'>Turn {'off' if autoreview else 'on'}</button></form>"
+        f"<button class='btn btn-sm btn-ghost' type='submit'>"
+        f"Turn auto-review {'off' if autoreview else 'on'}</button></form>"
     )
     reachable, host = await _machine_status()
     status_pill = _pill(
@@ -384,17 +512,20 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         banner += f"<div class='banner note'>{html.escape(note)}</div>"
     body = f"""
       <header>
-        <h1>crema ☕</h1>
+        <a class="brand" href="/"><img src="/icon.png" alt="" width="32" height="32">
+          <h1>crema</h1></a>
         <span class="row">{status_pill}<span class="muted" style="font-size:.82rem">{html.escape(host)}</span></span>
       </header>
+      <nav class="toc"><a href="#review">Latest review</a><a href="#edits">Profile edits</a><a href="#shots">Recent shots</a></nav>
       {banner}
-      <div class="row">
-        <form method="post" action="/review" class="inline"><button class="btn" type="submit">Run review</button></form>
+      <div class="row" style="margin-top:.9rem">
+        <form method="post" action="/review" class="inline">
+          <button class="btn" type="submit" title="Pull new shots off the machine and review them">Review new shots</button></form>
         {auto_pill}{auto_toggle}
       </div>
-      <h2>Latest review</h2>{_render_review(review, _profiles_in_shots(shots))}
-      <h2>Profile edits</h2>{_render_edits(edits)}
-      <h2>Recent shots</h2>{_render_shots(shots)}
+      <h2 id="review">Latest review</h2>{_render_review(review, _profiles_in_shots(shots))}
+      <h2 id="edits">Profile edits</h2>{_render_edits(edits)}
+      <h2 id="shots">Recent shots</h2>{_render_shots(shots)}
     """
     return _page(body)
 
@@ -443,11 +574,37 @@ async def run_analyze(shot_id: str = Form(...)) -> RedirectResponse:
 
 @app.post("/draft")
 async def run_draft(
-    review_id: int = Form(...), profile_id: Optional[str] = Form(None)
+    review_id: int = Form(...),
+    profile_id: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
 ) -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
-        await draft_from_review(conn, _cfg, review_id, profile_id=profile_id or None)
+        await draft_from_review(
+            conn, _cfg, review_id, profile_id=profile_id or None,
+            user_notes=(notes or "").strip() or None,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _redirect_error(e)
+    finally:
+        await conn.close()
+    return RedirectResponse("/", status_code=303)
+
+
+@app.post("/edits/{edit_id}/refine")
+async def refine_edit(edit_id: int, notes: str = Form(...)) -> RedirectResponse:
+    """Redraft an awaiting-approval edit with the barista's notes; supersedes it."""
+    conn = await db.connect(_cfg.db_path)
+    try:
+        edit = await db.get_pending_edit(conn, edit_id)
+        if edit is None or edit["status"] != "draft" or not edit["review_id"]:
+            return RedirectResponse(
+                "/?error=" + quote(f"Draft #{edit_id} can't be refined."), status_code=303
+            )
+        await draft_from_review(
+            conn, _cfg, edit["review_id"],
+            user_notes=notes.strip() or None, refine_edit_id=edit_id,
+        )
     except Exception as e:  # noqa: BLE001
         return _redirect_error(e)
     finally:
@@ -456,9 +613,20 @@ async def run_draft(
 
 
 @app.post("/edits/{edit_id}/push")
-async def approve_edit(edit_id: int) -> RedirectResponse:
+async def approve_edit(edit_id: int, ack: Optional[str] = Form(None)) -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
+        edit = await db.get_pending_edit(conn, edit_id)
+        # A draft that changes stop conditions needs explicit acknowledgement —
+        # enforced here too, not just by the checkbox in the form.
+        if edit and edit.get("stop_changes") and ack != "1":
+            return RedirectResponse(
+                "/?error=" + quote(
+                    f"Draft #{edit_id} changes the shot's stop conditions — tick the "
+                    "acknowledgement box to confirm you've reviewed them before pushing."
+                ),
+                status_code=303,
+            )
         await push_edit(conn, _cfg, edit_id)
     except Exception as e:  # noqa: BLE001
         return _redirect_error(e)

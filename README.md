@@ -30,6 +30,24 @@ _Add a screenshot of the web report here — see [`docs/SCREENSHOTS.md`](docs/SC
   ESP32 board or an Arduino — it runs on its own little computer alongside the
   machine.
 - **Python 3.13+** on that computer.
+
+### Minimum hardware & OS support
+
+crema is deliberately light — a plain Python web app with SQLite, no JavaScript
+frameworks, and the AI heavy lifting done by Anthropic's servers, not your box.
+
+| | Minimum that works | Notes |
+|---|---|---|
+| **Device** | Raspberry Pi Zero 2 W / Pi 3 or newer | Runs happily on a 32-bit armv7 Pi (that's what it was built on); any x86/ARM mini PC, old laptop, or NAS that runs Linux is more than enough |
+| **RAM** | ~512 MB total system RAM | crema itself uses on the order of 100 MB |
+| **Disk** | ~300 MB | Python 3.13 + dependencies; the shot database itself is tiny (KBs per shot, pruned after 30 days by default) |
+| **CPU / GPU** | Anything | It idles between reviews; no GPU, no local AI model |
+
+| OS | Status |
+|---|---|
+| **Linux** (Raspberry Pi OS, Debian, Ubuntu, …) | ✅ Fully supported — the intended home; `deploy/setup.sh` + systemd give you the unattended setup |
+| **macOS** | ✅ Works for running crema manually (`crema serve`, reviews, pushes); the systemd deploy script is Linux-only, so schedule with cron or a LaunchAgent instead |
+| **Windows** | ⚠️ Untested. The Python app itself should run, but the setup script, systemd units, and parts of `crema doctor` assume a Unix system — use **WSL** (Windows Subsystem for Linux) and follow the Linux instructions |
 - A **paid Anthropic API account** for Claude — this is what does the reviewing
   (see [The AI (Claude)](#the-ai-claude)). **This costs real money: you pay Anthropic
   directly, per shot reviewed.** It's cheap for home use (roughly a dollar or two
@@ -48,10 +66,14 @@ profile edit — only to pull new shots or push an approved edit back.
   set of suggestions plus a 1–10 quality score.
 - **Draft** — turns a review's profile suggestions into a complete, validated
   profile (rewritten from the one the shot ran on), clamped to device-safe
-  bounds, stored as a *pending edit*.
+  bounds, stored as a *pending edit*. You can add your own notes (how it tasted,
+  what you want) when drafting, and **refine** any draft with further notes
+  before approving — Claude redrafts and the old version is superseded.
 - **Approve & push** — on your say-so, writes the edit to the machine as a **new
   `[AI]` profile** over WebSocket (never overwrites your original; you select it
-  on the machine).
+  on the machine). If a draft changes the shot's **stop conditions** (volume /
+  flow / pressure targets that end the shot), crema lists exactly what changed
+  and requires an explicit acknowledgement before it will push.
 - **Report** — a small web page shows reviews, drafts, and recent shots, with
   “Run review”, “Draft profile edit”, and “Approve & push” buttons.
 

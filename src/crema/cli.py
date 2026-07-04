@@ -156,6 +156,9 @@ def draft(
     profile_id: Optional[str] = typer.Option(
         None, "--profile-id", help="Profile to base the edit on (default: the review's newest shot's)."
     ),
+    notes: Optional[str] = typer.Option(
+        None, "--notes", help="Your own feedback for Claude (taste, preferences, constraints)."
+    ),
 ) -> None:
     """Draft a profile edit from a review (stored as a pending edit, not pushed)."""
 
@@ -170,9 +173,14 @@ def draft(
                     typer.echo("No reviews to draft from. Run `crema review` first.")
                     return
                 rid = latest["id"]
-            edit = await draft_from_review(conn, cfg, rid, profile_id=profile_id)
+            edit = await draft_from_review(conn, cfg, rid, profile_id=profile_id, user_notes=notes)
             typer.echo(f"Drafted edit #{edit['id']} from review {rid}:")
             typer.echo(edit["change_summary"])
+            if edit["stop_changes"]:
+                typer.echo("\n⚠ Stop conditions changed vs the base profile:")
+                for c in edit["stop_changes"]:
+                    typer.echo(f"  - {c}")
+                typer.echo("Review these carefully before pushing.")
             typer.echo(f"\nApprove with:  crema push {edit['id']}")
         finally:
             await conn.close()
