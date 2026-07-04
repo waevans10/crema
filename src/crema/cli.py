@@ -20,7 +20,7 @@ from .doctor import run_checks
 from .draft import draft_from_review
 from .ingest import ingest_new_shots
 from .push import discard_edit, push_edit
-from .review import review_recent
+from .review import review_recent, review_shots
 
 app = typer.Typer(add_completion=False, help="Automated GaggiMate shot reviewer.")
 
@@ -82,9 +82,13 @@ def review(
         try:
             new_ids = await ingest_new_shots(conn, cfg)
             typer.echo(f"Ingested {len(new_ids)} new shot(s).")
-            if not new_ids and not force and await db.latest_review(conn) is not None:
-                typer.echo("No new shots since the last review — skipping (use --force to override).")
-                return
+            if not force:
+                if not await db.get_bool_setting(conn, "autoreview", cfg.autoreview):
+                    typer.echo("Auto-review is off — skipping (turn it on in the UI, or use --force).")
+                    return
+                if not new_ids and await db.latest_review(conn) is not None:
+                    typer.echo("No new shots since the last review — skipping (use --force to override).")
+                    return
             result = await review_recent(conn, cfg)
             if result is None:
                 typer.echo("No shots available to review yet.")
@@ -102,7 +106,57 @@ def review(
 
 
 @app.command()
-def draft(review_id: Optional[int] = typer.Argument(None, help="Review id (default: latest).")) -> None:
+def autoreview(
+    state: Optional[str] = typer.Argument(None, help="on | off (omit to show current state)."),
+) -> None:
+    """Turn automatic review of new shots on or off (governs the scheduled timer)."""
+
+    async def _run() -> None:
+        cfg = _config()
+        conn = await db.connect(cfg.db_path)
+        try:
+            if state is None:
+                on = await db.get_bool_setting(conn, "autoreview", cfg.autoreview)
+                typer.echo(f"Auto-review is {'ON' if on else 'OFF'}.")
+                return
+            s = state.strip().lower()
+            if s not in ("on", "off"):
+                typer.echo("Usage: crema autoreview [on|off]")
+                raise typer.Exit(code=1)
+            await db.set_setting(conn, "autoreview", "1" if s == "on" else "0")
+            typer.echo(f"Auto-review turned {s.upper()}.")
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
+def analyze(shot_id: str = typer.Argument(..., help="Shot id to analyze (e.g. 000091).")) -> None:
+    """Run a Claude review of one specific shot."""
+
+    async def _run() -> None:
+        cfg = _config()
+        conn = await db.connect(cfg.db_path)
+        try:
+            result = await review_shots(conn, cfg, [shot_id.zfill(6)])
+            if result is None:
+                typer.echo(f"Shot {shot_id} not found — run `crema ingest` first.")
+                return
+            typer.echo(json.dumps(result["suggestions"], indent=2))
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
+def draft(
+    review_id: Optional[int] = typer.Argument(None, help="Review id (default: latest)."),
+    profile_id: Optional[str] = typer.Option(
+        None, "--profile-id", help="Profile to base the edit on (default: the review's newest shot's)."
+    ),
+) -> None:
     """Draft a profile edit from a review (stored as a pending edit, not pushed)."""
 
     async def _run() -> None:
@@ -116,7 +170,7 @@ def draft(review_id: Optional[int] = typer.Argument(None, help="Review id (defau
                     typer.echo("No reviews to draft from. Run `crema review` first.")
                     return
                 rid = latest["id"]
-            edit = await draft_from_review(conn, cfg, rid)
+            edit = await draft_from_review(conn, cfg, rid, profile_id=profile_id)
             typer.echo(f"Drafted edit #{edit['id']} from review {rid}:")
             typer.echo(edit["change_summary"])
             typer.echo(f"\nApprove with:  crema push {edit['id']}")

@@ -7,18 +7,37 @@ from typing import Any, Optional
 import aiosqlite
 from anthropic import AsyncAnthropic
 
-from . import db
+from . import db, notify
 from .config import CremaConfig
 from .prompts import SYSTEM_PROMPT, ReviewResult, build_user_message
 
 
 async def review_recent(conn: aiosqlite.Connection, config: CremaConfig) -> Optional[dict[str, Any]]:
-    """Review the newest `review_window` shots and persist the suggestions.
+    """Review the newest `review_window` shots and persist the suggestions."""
+    shots = await db.recent_shots(conn, limit=config.review_window)
+    return await _review(conn, config, shots)
+
+
+async def review_shots(
+    conn: aiosqlite.Connection, config: CremaConfig, shot_ids: list[str]
+) -> Optional[dict[str, Any]]:
+    """Review a specific set of shots (by id) and persist the suggestions."""
+    shots: list[dict[str, Any]] = []
+    for sid in shot_ids:
+        shot = await db.get_shot(conn, sid)
+        if shot:
+            shots.append(shot)
+    return await _review(conn, config, shots)
+
+
+async def _review(
+    conn: aiosqlite.Connection, config: CremaConfig, shots: list[dict[str, Any]]
+) -> Optional[dict[str, Any]]:
+    """Run a Claude review over the given shots (newest first) and store it.
 
     Returns the stored review dict, or None if there are no shots to review.
     The Anthropic client reads ANTHROPIC_API_KEY from the environment.
     """
-    shots = await db.recent_shots(conn, limit=config.review_window)
     if not shots:
         return None
 
@@ -45,7 +64,7 @@ async def review_recent(conn: aiosqlite.Connection, config: CremaConfig) -> Opti
     suggestions = result.model_dump()
     review_id = await db.insert_review(conn, newest_shot_id, config.review_model, suggestions)
     usage = getattr(response, "usage", None)
-    return {
+    stored = {
         "id": review_id,
         "shot_id": newest_shot_id,
         "model": config.review_model,
@@ -57,3 +76,6 @@ async def review_recent(conn: aiosqlite.Connection, config: CremaConfig) -> Opti
         if usage
         else None,
     }
+    # Fire the Discord notification (best-effort; no-op if unconfigured).
+    await notify.notify_review(config, stored)
+    return stored

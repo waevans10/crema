@@ -30,7 +30,12 @@ Be concrete and specific: name the direction and rough magnitude of each change 
 ("grind 1–2 steps finer", "drop brew temperature ~1°C", "extend the pre-infusion \
 phase by ~2s"). Stay within safe bounds (temperature 25–100°C, pressure 0–12 bar). \
 If the shots already look good, say so and suggest nothing. Never invent data that \
-isn't in the telemetry.\
+isn't in the telemetry.
+
+Also give the most recent shot a 1-10 quality score: 1-3 badly flawed (gushing, \
+choked, severe channeling), 4-6 drinkable but clearly off, 7-8 good, 9-10 dialled \
+in. Judge it from the telemetry (extraction time, flow/pressure shape, channeling \
+risk, temperature stability), not from taste you can't see.\
 """
 
 
@@ -50,6 +55,10 @@ class ProfileChange(BaseModel):
 class ReviewResult(BaseModel):
     """Structured output crema stores and renders in the UI."""
 
+    score: int = Field(
+        description="Overall quality of the MOST RECENT shot on a 1-10 scale "
+        "(1 = badly flawed, 5 = drinkable but off, 8+ = dialled in / excellent). Whole number."
+    )
     diagnosis: str = Field(description="One or two sentences: what the recent shots show.")
     grind_change: str = Field(
         description="Grind adjustment with direction and magnitude, or 'none' if grind is dialled in."

@@ -45,6 +45,16 @@ class CremaConfig(BaseSettings):
     # How many recent shots to include as context in a single review.
     review_window: int = 5
 
+    # Whether the scheduled timer auto-reviews new shots. This is the *default*;
+    # the UI/CLI toggle (stored in the DB) overrides it once set. Off by default so
+    # nothing spends automatically until you turn it on.
+    autoreview: bool = False
+
+    # Retention: shots (and their reviews/edits) older than this many days are
+    # pruned on each ingest, so the DB stays bounded. ~3-4 shots/day * 30 days is
+    # tiny. Set 0 to keep everything forever.
+    retention_days: int = 30
+
     # Web UI bind. 127.0.0.1 = loopback (view via SSH tunnel); 0.0.0.0 = reachable
     # on the LAN. If you bind to the LAN, set a web password below.
     host: str = "127.0.0.1"
@@ -54,6 +64,10 @@ class CremaConfig(BaseSettings):
     # loopback). Set a password when binding to the LAN.
     web_user: str = "crema"
     web_password: str = ""
+
+    # Optional Discord webhook. When set, crema posts a message each time a shot is
+    # reviewed, with its 1-10 score and the diagnosis. Empty = disabled.
+    discord_webhook_url: str = ""
 
     def gaggimate(self) -> GaggimateConfig:
         """Build the vendored device config (reads its own GAGGIMATE_* env vars)."""

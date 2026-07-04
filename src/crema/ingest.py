@@ -25,6 +25,9 @@ async def ingest_new_shots(conn: aiosqlite.Connection, config: CremaConfig, limi
 
     Returns the list of newly ingested (padded) shot ids, newest first.
     """
+    # Keep the DB bounded: drop shots older than the retention window.
+    await db.prune_old(conn, config.retention_days)
+
     client = GaggimateHTTPClient(config.gaggimate())
     index = await client.list_recent_shots(limit=limit)
     known = await db.known_shot_ids(conn)

@@ -45,14 +45,22 @@ uv sync                   # or: pip install -e .
 Confirm the Pi can reach the machine (`ping gaggimate.local`), then:
 
 ```bash
-crema ingest              # pull new shots
-crema review              # ingest + run a Claude review, print suggestions
-crema draft [REVIEW_ID]   # draft a profile edit from a review (latest if omitted)
+crema doctor              # check device + Claude connectivity
+crema ingest              # pull new shots (also prunes shots past the retention window)
+crema review              # ingest + review (auto-gated: only new shots, only if autoreview on)
+crema analyze SHOT_ID     # review one specific shot
+crema draft [REVIEW_ID]   # draft a profile edit (--profile-id to target a specific profile)
 crema edits               # list drafted / pushed edits
 crema push EDIT_ID        # approve & push an edit to the machine as a new [AI] profile
 crema discard EDIT_ID     # discard a drafted edit
+crema autoreview [on|off] # toggle automatic review of new shots by the timer
 crema serve               # web report at http://127.0.0.1:8765
 ```
+
+The web report shows machine online/off status, the latest review (with a 1–10
+score sent to Discord), drafted edits, and recent shots — with buttons to run a
+review, analyze a specific shot, draft an edit for a chosen profile, approve/push
+edits, and toggle auto-review.
 
 ## Configuration
 
@@ -65,6 +73,10 @@ All via `.env` (see `.env.example`):
 | `CREMA_REVIEW_MODEL` | model for routine reviews | `claude-sonnet-5` |
 | `CREMA_DRAFT_MODEL` | model for profile drafting (Phase 2) | `claude-opus-4-8` |
 | `CREMA_REVIEW_WINDOW` | shots per review | `5` |
+| `CREMA_RETENTION_DAYS` | prune shots older than this (0 = keep all) | `30` |
+| `CREMA_AUTOREVIEW` | default for timer auto-review (UI toggle overrides) | `false` |
+| `CREMA_DISCORD_WEBHOOK_URL` | Discord webhook for shot score notifications | — |
+| `CREMA_WEB_USER` / `CREMA_WEB_PASSWORD` | web Basic auth (blank pw = open) | `crema` / — |
 | `CREMA_DB_PATH` | SQLite path | `./crema.db` |
 | `CREMA_HOST` / `CREMA_PORT` | web bind | `127.0.0.1` / `8765` |
 

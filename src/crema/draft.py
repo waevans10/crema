@@ -9,7 +9,7 @@ only happens on explicit approval (see push.py).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 import aiosqlite
 from anthropic import AsyncAnthropic
@@ -52,8 +52,17 @@ def _to_device_phase(phase: Any) -> dict[str, Any]:
     return p
 
 
-async def draft_from_review(conn: aiosqlite.Connection, config: CremaConfig, review_id: int) -> dict[str, Any]:
+async def draft_from_review(
+    conn: aiosqlite.Connection,
+    config: CremaConfig,
+    review_id: int,
+    profile_id: Optional[str] = None,
+) -> dict[str, Any]:
     """Draft a profile edit for a stored review. Returns the pending-edit dict.
+
+    `profile_id` chooses which profile to base the edit on — useful when the
+    reviewed shots span several profiles. If omitted, the profile the review's
+    newest shot ran on is used.
 
     Raises RuntimeError if the base profile can't be loaded or the draft is invalid.
     """
@@ -61,11 +70,12 @@ async def draft_from_review(conn: aiosqlite.Connection, config: CremaConfig, rev
     if review is None:
         raise RuntimeError(f"Review {review_id} not found.")
 
-    shot = await db.get_shot(conn, review["shot_id"])
-    profile_id = (shot or {}).get("transformed", {}).get("profile_id") if shot else None
+    if not profile_id:
+        shot = await db.get_shot(conn, review["shot_id"])
+        profile_id = (shot or {}).get("transformed", {}).get("profile_id") if shot else None
     if not profile_id:
         raise RuntimeError(
-            "Can't draft: the reviewed shot has no profile_id, so there's no base profile to edit."
+            "Can't draft: no profile selected and the reviewed shot has no profile_id."
         )
 
     ws = GaggimateWebSocketClient(config.gaggimate())

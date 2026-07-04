@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS pending_edits (
 );
 
 CREATE INDEX IF NOT EXISTS idx_edits_status ON pending_edits(status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
 """
 
 
@@ -66,6 +71,48 @@ async def connect(db_path: Path) -> aiosqlite.Connection:
     await db.executescript(SCHEMA)
     await db.commit()
     return db
+
+
+async def get_setting(db: aiosqlite.Connection, key: str) -> Optional[str]:
+    async with db.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cur:
+        row = await cur.fetchone()
+    return row["value"] if row else None
+
+
+async def set_setting(db: aiosqlite.Connection, key: str, value: str) -> None:
+    await db.execute(
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    await db.commit()
+
+
+async def get_bool_setting(db: aiosqlite.Connection, key: str, default: bool) -> bool:
+    """Read a boolean setting, falling back to `default` when it's never been set."""
+    raw = await get_setting(db, key)
+    return default if raw is None else raw == "1"
+
+
+async def prune_old(db: aiosqlite.Connection, retention_days: int) -> int:
+    """Delete shots (and their reviews/edits) ingested more than N days ago.
+
+    Uses crema's own insertion time (created_at), not the device timestamp, so it's
+    robust regardless of the machine's clock. Deletes children first to satisfy
+    foreign keys. Returns the number of shots removed. No-op when retention_days<=0.
+    """
+    if retention_days <= 0:
+        return 0
+    cutoff = f"unixepoch('now') - {int(retention_days) * 86400}"
+    old = f"(SELECT id FROM shots WHERE created_at < {cutoff})"
+    await db.execute(
+        f"DELETE FROM pending_edits WHERE review_id IN "
+        f"(SELECT id FROM reviews WHERE shot_id IN {old})"
+    )
+    await db.execute(f"DELETE FROM reviews WHERE shot_id IN {old}")
+    cur = await db.execute(f"DELETE FROM shots WHERE created_at < {cutoff}")
+    await db.commit()
+    return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
 
 
 async def known_shot_ids(db: aiosqlite.Connection) -> set[str]:
