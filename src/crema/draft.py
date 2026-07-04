@@ -35,8 +35,21 @@ def _clamp(value: float, low: float, high: float) -> float:
 _OP = {"gte": "≥", "lte": "≤"}
 
 
+def _fmt_val(v: Any) -> str:
+    """Format a stop value canonically so 9, 9.0, and "9.0" all read '9'.
+
+    Keeps numerically-equal values from being flagged as a stop-condition
+    change just because the draft echoed a float for an int.
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return str(int(f)) if f.is_integer() else f"{f:g}"
+
+
 def _fmt_target(t: dict[str, Any]) -> str:
-    return f"{t.get('type', '?')} {_OP.get(str(t.get('operator')), t.get('operator', '?'))} {t.get('value', '?')}"
+    return f"{t.get('type', '?')} {_OP.get(str(t.get('operator')), t.get('operator', '?'))} {_fmt_val(t.get('value', '?'))}"
 
 
 def diff_stop_conditions(
@@ -69,13 +82,14 @@ def diff_stop_conditions(
                 if (
                     ot.get("type") == nt.get("type")
                     and ot.get("operator") == nt.get("operator")
-                    and ot.get("value") != nt.get("value")
+                    and _fmt_val(ot.get("value")) != _fmt_val(nt.get("value"))
                     and _fmt_target(ot) in old_left
                     and _fmt_target(nt) in new_left
                 ):
                     changes.append(
                         f"{name}: stop {ot.get('type')} "
-                        f"{_OP.get(str(ot.get('operator')), '?')} {ot.get('value')} → {nt.get('value')}"
+                        f"{_OP.get(str(ot.get('operator')), '?')} "
+                        f"{_fmt_val(ot.get('value'))} → {_fmt_val(nt.get('value'))}"
                     )
                     old_left.remove(_fmt_target(ot))
                     new_left.remove(_fmt_target(nt))

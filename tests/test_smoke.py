@@ -91,6 +91,14 @@ def test_diff_stop_conditions_flags_changes_and_ignores_identical():
     assert any("removed stop" in c for c in out)
     assert any("36 → 40" in c for c in out)
 
+    # 9 vs 9.0 (and "9.0" as a string) are the SAME stop — no false positive.
+    # Seen live: Draft #4 flagged "added ≥ 9.0 / removed ≥ 9" for an echo.
+    echoed = [
+        {"name": "Preinfusion", "targets": [{"type": "pumped", "operator": "gte", "value": 60.0}]},
+        {"name": "Extraction", "targets": [{"type": "volumetric", "operator": "gte", "value": "36.0"}]},
+    ]
+    assert diff_stop_conditions(base, echoed) == []
+
 
 def test_build_draft_message_includes_notes_and_previous_draft():
     base = {"label": "P", "phases": []}
