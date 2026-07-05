@@ -226,7 +226,13 @@ zero/choke point. If the scale or its direction (which way is finer) is NOT give
 do NOT invent a bare number that could be misread as a position on the user's own \
 dial — instead describe it relative to espresso (e.g. "fine espresso range, a \
 touch coarser than Turkish") and say the exact number depends on their grinder's \
-scale. Respect whether the grinder is stepped or stepless.
+scale. Respect whether the grinder is stepped or stepless. \
+If the grinder description states the barista's USUAL espresso setting (e.g. "I \
+grind around 10 for espresso"), ANCHOR on it: start from that number and adjust \
+for this roast — a step or two FINER for a lighter roast, COARSER for a darker \
+one — instead of picking a value from scratch. A first-principles grind number \
+(no baseline, no similar shots) is only a rough guess; keep it modest and tell \
+the barista to trust their own dial-in from there.
 - Recommend a dose (g), a target yield (g), and the ratio. If the barista gave a \
 dose, use it.
 - Produce a COMPLETE, push-ready profile: a pre-infusion phase and one or more \
