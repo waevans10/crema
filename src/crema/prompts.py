@@ -217,9 +217,16 @@ ratio (~1:2 to 1:3) and a gentle, longer pre-infusion to avoid channeling; darke
 roasts want a coarser grind, lower temperature (~88–92°C), a shorter ratio \
 (~1:1.5 to 1:2) and less pre-infusion. Very fresh beans (roasted in the last few \
 days) degas heavily — expect faster flow and lean slightly finer.
-- Give the grind setting in the grinder's OWN terms (its steps, clicks, numbers, \
-or rotation marks); respect whether it is stepped or stepless. If no grinder is \
-described, use generic "steps on a typical stepped grinder" language.
+- Give the grind setting in the grinder's OWN terms. If the grinder description \
+states a numbered scale or range (e.g. "dial marked 0–90", "0–10", "40 clicks per \
+rotation"), give the setting as a SPECIFIC NUMBER ON THAT SCALE, name the scale \
+you are using (e.g. "22 on the 0–90 dial"), and keep it realistic for espresso — \
+espresso sits toward the FINE end of the range, but never at the extreme \
+zero/choke point. If the scale or its direction (which way is finer) is NOT given, \
+do NOT invent a bare number that could be misread as a position on the user's own \
+dial — instead describe it relative to espresso (e.g. "fine espresso range, a \
+touch coarser than Turkish") and say the exact number depends on their grinder's \
+scale. Respect whether the grinder is stepped or stepless.
 - Recommend a dose (g), a target yield (g), and the ratio. If the barista gave a \
 dose, use it.
 - Produce a COMPLETE, push-ready profile: a pre-infusion phase and one or more \
