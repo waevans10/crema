@@ -551,6 +551,17 @@ def test_review_persists_token_usage(tmp_path):
     asyncio.run(_run())
 
 
+def test_state_sig_changes_on_new_review_or_shot():
+    from crema.web.app import _state_sig
+
+    base = _state_sig({"id": 5}, [{"id": "000010"}], 1)
+    assert _state_sig({"id": 6}, [{"id": "000010"}], 1) != base   # new review
+    assert _state_sig({"id": 5}, [{"id": "000011"}], 1) != base   # new shot
+    assert _state_sig({"id": 5}, [{"id": "000010"}], 2) != base   # new edit
+    assert _state_sig({"id": 5}, [{"id": "000010"}], 1) == base   # unchanged
+    assert _state_sig(None, [], 0) == "0:-:0"                      # empty state
+
+
 def test_bean_age_days_and_aging_banner():
     from crema.web.app import _bean_age_days, _aging_banner
 

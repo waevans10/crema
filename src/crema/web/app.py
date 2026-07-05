@@ -235,7 +235,9 @@ nav.toc a:hover{color:var(--accent)}
 .review-top{display:flex;gap:.9rem;align-items:flex-start}
 textarea{font:inherit;color:var(--text);background:var(--surface-2);width:100%;
   border:1px solid var(--border);border-radius:8px;padding:.45rem .6rem;resize:vertical}
-textarea::placeholder{color:var(--muted);opacity:.8}
+textarea::placeholder,input::placeholder{color:var(--muted);opacity:.9}
+input[type=date]{color:var(--text)}
+input[type=date]::-webkit-datetime-edit{color:var(--muted)}
 label.ack{display:flex;align-items:center;gap:.45rem;font-size:.88rem;color:var(--lo);
   font-weight:600;margin:.2rem 0}
 details.sec>summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:.45rem;
@@ -272,6 +274,25 @@ _CHIP_JS = """
 function tchip(b){var t=b.closest('form').querySelector('textarea');if(!t)return;
 var w=b.getAttribute('data-w');t.value=t.value.trim()?t.value.replace(/[,\\s]+$/,'')+', '+w:w;t.focus();}
 """
+
+# Auto-refresh: poll a tiny /state endpoint and reload only when the state
+# signature changes (a new shot reviewed by the timer, a new draft, etc.). Pauses
+# while the tab is hidden so an idle Pi isn't polled needlessly. __SIG__ is the
+# signature at render time, substituted server-side. No framework, ~1 request/12s.
+_POLL_JS = """
+(function(){var cur="__SIG__";function poll(){if(document.hidden)return;
+fetch("/state",{credentials:"same-origin"}).then(function(r){return r.ok?r.json():null;})
+.then(function(s){if(s&&s.sig&&s.sig!==cur){location.reload();}}).catch(function(){});}
+setInterval(poll,12000);})();
+"""
+
+
+def _state_sig(review: Optional[dict[str, Any]], shots: list[dict[str, Any]], n_edits: int) -> str:
+    """A compact signature of what's on the report — changes when there's
+    something new to show (a fresh review, a new shot, a new/updated edit)."""
+    rid = review["id"] if review else 0
+    sid = shots[0]["id"] if shots else "-"
+    return f"{rid}:{sid}:{n_edits}"
 
 
 def _page(body: str) -> str:
@@ -1146,7 +1167,23 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
           </form>
         </div></details>
     """
+    # Auto-refresh the report when the timer reviews a new shot in the background.
+    sig = _state_sig(review, shots, len(edits))
+    body += f"<script>{_POLL_JS.replace('__SIG__', sig)}</script>"
     return _page(body)
+
+
+@app.get("/state")
+async def state() -> dict[str, str]:
+    """Tiny JSON signature the report polls to know when to auto-refresh."""
+    conn = await db.connect(_cfg.db_path)
+    try:
+        review = await db.latest_review(conn)
+        shots = await db.recent_shots(conn, limit=1)
+        edits = await db.list_pending_edits(conn, limit=10)
+    finally:
+        await conn.close()
+    return {"sig": _state_sig(review, shots, len(edits))}
 
 
 @app.post("/review")
