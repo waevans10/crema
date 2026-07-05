@@ -11,6 +11,7 @@ this object so it never ends up serialized in a log or a response.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from dotenv import find_dotenv, load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -39,8 +40,9 @@ class CremaConfig(BaseSettings):
 
     # Which machine platform to ingest from: "gaggimate" (default) or
     # "gaggiuino". Reviews/notes/beans/pool work for both; profile drafting
-    # and push-back are GaggiMate-only for now.
-    machine: str = "gaggimate"
+    # and push-back are GaggiMate-only for now. A Literal so a typo in .env
+    # (CREMA_MACHINE=Gaggiuino) fails loudly instead of silently defaulting.
+    machine: Literal["gaggimate", "gaggiuino"] = "gaggimate"
 
     # Base URL of the Gaggiuino web server (only used when machine=gaggiuino).
     gaggiuino_url: str = "http://gaggiuino.local"
@@ -73,6 +75,10 @@ class CremaConfig(BaseSettings):
     # the UI/CLI toggle (stored in the DB) overrides it once set. Off by default so
     # nothing spends automatically until you turn it on.
     autoreview: bool = False
+
+    # Beans older than this many days past their roast date show an "aging"
+    # warning in the web UI (past-peak flavour / faster flow). 0 disables it.
+    bean_max_age_days: int = 30
 
     # Retention: shots (and their reviews/edits) older than this many days are
     # pruned on each ingest, so the DB stays bounded. ~3-4 shots/day * 30 days is

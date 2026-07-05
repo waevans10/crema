@@ -199,6 +199,132 @@ def build_draft_message(
     return "\n\n".join(parts)
 
 
+STARTING_SYSTEM_PROMPT = """\
+You are an expert espresso barista giving a barista a STARTING POINT for a bean \
+they have never pulled before — a first shot to dial in from, not a finished \
+recipe. You are given the bean (name/origin, roast level, process, roast date), \
+the grinder, and — where available — the barista's most SIMILAR past shots: the \
+telemetry, the profile each ran, and the review you gave. Anchor on those.
+
+Method:
+- If similar past shots are provided, START from what already worked for them — \
+especially the higher-scoring ones — and nudge for the difference in roast level, \
+process, or freshness. A shot that scored well on a similar bean is the best \
+possible starting point; do not throw it away and start from theory.
+- If no similar shots are provided, reason from first principles for the roast \
+level: lighter roasts want a finer grind, higher temperature (~93–96°C), a longer \
+ratio (~1:2 to 1:3) and a gentle, longer pre-infusion to avoid channeling; darker \
+roasts want a coarser grind, lower temperature (~88–92°C), a shorter ratio \
+(~1:1.5 to 1:2) and less pre-infusion. Very fresh beans (roasted in the last few \
+days) degas heavily — expect faster flow and lean slightly finer.
+- Give the grind setting in the grinder's OWN terms (its steps, clicks, numbers, \
+or rotation marks); respect whether it is stepped or stepless. If no grinder is \
+described, use generic "steps on a typical stepped grinder" language.
+- Recommend a dose (g), a target yield (g), and the ratio. If the barista gave a \
+dose, use it.
+- Produce a COMPLETE, push-ready profile: a pre-infusion phase and one or more \
+brew phases, each with temperature, pump target (pressure or flow), transition, \
+and stop conditions (targets). Include a stop condition that ends the shot near \
+the target yield (a volumetric/pumped target), so the shot terminates by weight.
+
+Stay conservative and in safe bounds: water/phase temperature 60–96°C, pump \
+pressure 0–12 bar, flow ≥ 0, each phase duration > 0 and ≤ 120s, phase type \
+'preinfusion' or 'brew'. This is a place to START — favour a sensible, forgiving \
+shot over an aggressive one. Never invent past-shot data that wasn't given.\
+"""
+
+
+class StartingPoint(BaseModel):
+    """A first-shot recommendation for a brand-new bean, with a push-ready profile."""
+
+    grind_setting: str = Field(
+        description="Where to set the grinder, in ITS own terms (steps/clicks/numbers)."
+    )
+    dose_g: float = Field(description="Recommended dose in grams.")
+    yield_g: float = Field(description="Target yield (out weight) in grams.")
+    ratio: str = Field(description="Brew ratio, e.g. '1:2.2'.")
+    rationale: str = Field(
+        description="Why this starting point — cite the similar past shots when they informed it."
+    )
+    profile: DraftedProfile = Field(
+        description="The complete push-ready starting profile (label, temperature, phases)."
+    )
+
+
+def build_starting_message(
+    bean: dict[str, Any],
+    grinder: Optional[str] = None,
+    dose_target: Optional[float] = None,
+    similar: Optional[list[dict[str, Any]]] = None,
+) -> str:
+    """Render the new-bean context (+ similar past shots) into the user turn.
+
+    `bean` is a structured bean dict (name, roast_level, process, roast_date).
+    `similar` is a list of {shot, review, profile, similarity} for the closest
+    past shots — their telemetry, the profile they ran, and the review given, so
+    Claude can start from what worked rather than from theory.
+    """
+    parts = [
+        "NEW BEAN (never pulled before — give a starting point to dial in from):",
+        json.dumps(
+            {
+                "name": bean.get("name"),
+                "roast_level": bean.get("roast_level"),
+                "process": bean.get("process"),
+                "roast_date": bean.get("roast_date"),
+                "notes": bean.get("notes"),
+            },
+            indent=2,
+            default=str,
+        ),
+    ]
+    if grinder:
+        parts.append(f"GRINDER: {grinder}")
+    if dose_target:
+        parts.append(f"DOSE the barista wants to use: {dose_target}g")
+    if similar:
+        blocks = []
+        for s in similar:
+            shot = s["shot"]
+            t = shot.get("transformed", {})
+            lines = [
+                f"--- Similar past shot {shot['id']} "
+                f"(bean: {shot.get('coffee') or 'unknown'}; similarity: {s.get('similarity_label', 'some')}) ---",
+                "telemetry: "
+                + json.dumps(
+                    {
+                        "duration_seconds": t.get("duration_seconds"),
+                        "final_weight_g": t.get("final_weight_g"),
+                        "summary": t.get("summary"),
+                    },
+                    default=str,
+                ),
+            ]
+            if shot.get("tasting_notes"):
+                lines.append(f"barista tasting notes: {shot['tasting_notes']}")
+            if s.get("review"):
+                lines.append("your review then: " + _compact_review(s["review"]))
+            if s.get("profile"):
+                lines.append(
+                    "profile it ran (a strong basis for the starting profile):\n"
+                    + json.dumps(s["profile"], indent=2, default=str)
+                )
+            blocks.append("\n".join(lines))
+        parts.append(
+            "MOST SIMILAR PAST SHOTS (start from what worked here, adjust for the "
+            "roast-level/process difference):\n" + "\n\n".join(blocks)
+        )
+    else:
+        parts.append(
+            "No sufficiently similar past shots were found — reason from first "
+            "principles for this roast level."
+        )
+    parts.append(
+        "Return a starting grind, dose, yield/ratio, and a complete push-ready profile."
+    )
+    return "\n\n".join(parts)
+
+
 def _compact_review(suggestions: dict[str, Any]) -> str:
     """One-paragraph summary of a past review's advice, for interleaving as context."""
     parts = []
@@ -210,8 +336,13 @@ def _compact_review(suggestions: dict[str, Any]) -> str:
         parts.append(f"grind: {suggestions['grind_change']}")
     if suggestions.get("dose_yield_change") and suggestions["dose_yield_change"] != "none":
         parts.append(f"dose/yield: {suggestions['dose_yield_change']}")
-    for pc in suggestions.get("profile_changes") or []:
+    # Cap the profile changes: this compact line is interleaved into every later
+    # review's context, so an edit with many changes shouldn't bloat the window.
+    changes = suggestions.get("profile_changes") or []
+    for pc in changes[:4]:
         parts.append(f"profile: {pc.get('parameter')} → {pc.get('change')}")
+    if len(changes) > 4:
+        parts.append(f"(+{len(changes) - 4} more profile changes)")
     return "; ".join(parts) if parts else "no changes recommended"
 
 

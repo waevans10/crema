@@ -445,3 +445,119 @@ def test_maybe_autoshare_gates_on_consent(tmp_path, monkeypatch):
             await conn.close()
 
     asyncio.run(_run())
+
+
+# --- new-bean starting point --------------------------------------------------
+
+
+def test_parse_roast_bucket_reads_compound_levels_first():
+    from crema.starting import parse_roast_bucket
+
+    assert parse_roast_bucket("medium-dark Brazilian") == 3  # not 'medium' or 'dark'
+    assert parse_roast_bucket("medium light washed") == 1
+    assert parse_roast_bucket("light roast Colombian") == 0
+    assert parse_roast_bucket("dark Italian blend") == 4
+    assert parse_roast_bucket("just some coffee") is None
+    assert parse_roast_bucket(None) is None
+
+
+def test_similarity_ranks_roast_then_origin():
+    from crema.starting import similarity
+
+    bean = {"name": "Colombian Huila", "roast_level": "light", "process": "washed"}
+    exact = similarity(bean, "Colombian Huila · light roast · washed")
+    same_roast_diff_origin = similarity(bean, "Ethiopian natural, light roast")
+    adjacent = similarity(bean, "medium-light Ethiopian")  # adjacent roast, no origin overlap
+    unrelated = similarity(bean, "dark Italian blend")
+    # Exact beats same-roast-different-origin beats adjacent-roast beats unrelated.
+    assert exact > same_roast_diff_origin > adjacent > unrelated == 0
+
+
+def test_find_similar_shots_excludes_unrelated_and_ranks(tmp_path):
+    """Only meaningfully-similar shots come back, best first, with their reviews."""
+    from crema.starting import find_similar_shots
+
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            await crema_db.upsert_shot(conn, "000001", {"profile_id": "p"}, captured_at=1.0, coffee="dark Italian blend")
+            await crema_db.upsert_shot(conn, "000002", {"profile_id": "p"}, captured_at=2.0, coffee="Ethiopian light roast")
+            await crema_db.upsert_shot(conn, "000003", {"profile_id": "p"}, captured_at=3.0, coffee="Colombian Huila, light roast, washed")
+            await crema_db.insert_review(conn, "000003", "m", {"score": 8, "diagnosis": "great"})
+            bean = {"name": "Colombian Huila", "roast_level": "light", "process": "washed"}
+            out = await find_similar_shots(conn, bean, limit=5)
+            ids = [s["shot"]["id"] for s in out]
+            assert ids[0] == "000003"          # closest first
+            assert "000001" not in ids          # dark blend excluded
+            assert out[0]["review"]["score"] == 8
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_bean_library_roundtrip_and_roast_check_constraint(tmp_path):
+    import aiosqlite
+
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            bid = await crema_db.insert_bean(conn, "Colombian Huila", "light", process="washed", roast_date="2026-06-20")
+            await crema_db.set_active_bean(conn, bid)
+            active = await crema_db.active_bean(conn)
+            assert active is not None and active["id"] == bid
+            # Active bean keeps the freetext coffee setting in sync for reviews.
+            assert await crema_db.get_setting(conn, "coffee") == crema_db.canonical_coffee(active)
+            # The roast_level CHECK constraint rejects out-of-vocabulary values.
+            try:
+                await conn.execute("INSERT INTO beans (name, roast_level) VALUES ('x', 'extra-light')")
+                raise AssertionError("CHECK constraint should have rejected 'extra-light'")
+            except aiosqlite.IntegrityError:
+                pass
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_score_history_pairs_scores_and_orders_oldest_first(tmp_path):
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            await crema_db.upsert_shot(conn, "000001", {"final_weight_g": 36.0, "duration_seconds": 27.0}, captured_at=100.0)
+            await crema_db.upsert_shot(conn, "000002", {"final_weight_g": 38.0, "duration_seconds": 30.0}, captured_at=200.0)
+            await crema_db.insert_review(conn, "000002", "m", {"score": 8})
+            hist = await crema_db.score_history(conn, limit=10)
+            assert [h["id"] for h in hist] == ["000001", "000002"]  # oldest → newest
+            assert hist[0]["score"] is None and hist[1]["score"] == 8
+            assert hist[1]["yield_g"] == 38.0
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_review_persists_token_usage(tmp_path):
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            await crema_db.upsert_shot(conn, "000001", {"time": 28.0})
+            rid = await crema_db.insert_review(conn, "000001", "m", {"score": 7}, input_tokens=1234, output_tokens=567)
+            row = await crema_db.get_review(conn, rid)
+            assert row["input_tokens"] == 1234 and row["output_tokens"] == 567
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_bean_age_days_and_aging_banner():
+    from crema.web.app import _bean_age_days, _aging_banner
+
+    today = datetime.date.today().isoformat()
+    old = (datetime.date.today() - datetime.timedelta(days=90)).isoformat()
+    assert _bean_age_days(today) == 0
+    assert _bean_age_days(old) == 90
+    assert _bean_age_days(None) is None
+    assert _aging_banner({"name": "X", "roast_level": "light", "roast_date": old})  # warns
+    assert _aging_banner({"name": "X", "roast_level": "light", "roast_date": today}) == ""  # fresh

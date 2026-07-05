@@ -73,6 +73,15 @@ profile edit — only to pull new shots or push an approved edit back.
   puck resistance, temp stability, profile compliance).
 - **Review** — hands the recent-shot window to Claude and stores a structured
   set of suggestions plus a 1–10 quality score.
+- **Start a new bean** — got a bag you've never pulled? Add it (name, roast
+  level, process, roast date) and crema generates a starting grind, dose, and a
+  complete push-ready profile — anchored on your **most similar past shots** when
+  it can find them (matched by roast level and origin), and on roast-level first
+  principles when it can't. Staged for approval like any other edit; nothing is
+  pushed automatically.
+- **Trends** — a `/trends` page charts your shot score over time (with a 7-shot
+  rolling average and markers where the beans changed) so you can see a dial-in
+  working. Pure server-rendered SVG — no JavaScript, no charting library.
 - **Draft** — turns a review's profile suggestions into a complete, validated
   profile (rewritten from the one the shot ran on), clamped to device-safe
   bounds, stored as a *pending edit*. You can add your own notes (how it tasted,
@@ -212,6 +221,9 @@ crema draft [REVIEW_ID]   # draft a profile edit (--profile-id to target a speci
 crema edits               # list drafted / pushed edits
 crema push EDIT_ID        # approve & push an edit to the machine as a new [AI] profile
 crema discard EDIT_ID     # discard a drafted edit
+crema bean "NAME" --roast light   # add a bean (--process, --roast-date) and make it active
+crema beans               # list your bean library (* = active)
+crema start [--dose 18]   # generate a starting-point profile for a new bean (staged for approval)
 crema autoreview [on|off] # toggle automatic review of new shots by the timer
 crema grinder ["DESC"]    # describe your grinder so grind advice uses its steps/clicks
 crema coffee ["DESC"]     # describe the beans in the hopper so advice fits them

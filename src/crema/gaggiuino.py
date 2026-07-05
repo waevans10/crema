@@ -140,7 +140,13 @@ async def ingest_new_shots_gaggiuino(
     await db.prune_old(conn, config.retention_days)
     base = config.gaggiuino_url.rstrip("/")
     known = await db.known_shot_ids(conn)
-    coffee = (await db.get_setting(conn, "coffee")) or config.coffee or None
+    active = await db.active_bean(conn)
+    bean_id = active["id"] if active else None
+    coffee = (
+        db.canonical_coffee(active)
+        if active
+        else (await db.get_setting(conn, "coffee")) or config.coffee or None
+    )
 
     new_ids: list[str] = []
     timeout = aiohttp.ClientTimeout(total=30)
@@ -165,6 +171,7 @@ async def ingest_new_shots_gaggiuino(
                 transformed=transformed,
                 captured_at=float(shot["timestamp"]) if shot.get("timestamp") else None,
                 coffee=coffee,
+                bean_id=bean_id,
             )
             new_ids.append(transformed["shot_id"])
     return new_ids

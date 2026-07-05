@@ -31,6 +31,7 @@ from ..export import SHARE_TERMS, maybe_autoshare, record_autoshare_consent
 from ..ingest import ingest_new_shots
 from ..push import discard_edit, push_edit
 from ..review import review_recent, review_shots
+from ..starting import generate_starting_point
 
 _cfg = CremaConfig()
 _security = HTTPBasic(auto_error=False)
@@ -190,6 +191,12 @@ code{background:var(--surface-2);border:1px solid var(--border);border-radius:6p
   padding:.05rem .35rem;font-size:.9em}
 pre{background:var(--surface-2);border:1px solid var(--border);border-radius:10px;
   padding:.7rem .85rem;margin:.5rem 0;white-space:pre-wrap;font-size:.9rem;overflow-x:auto}
+table.trend{width:100%;border-collapse:collapse;font-size:.88rem;font-variant-numeric:tabular-nums}
+table.trend th{text-align:left;color:var(--muted);font-weight:700;font-size:.74rem;
+  text-transform:uppercase;letter-spacing:.05em;padding:.3rem .5rem;border-bottom:1px solid var(--border)}
+table.trend td{padding:.32rem .5rem;border-bottom:1px solid var(--border)}
+table.trend tbody tr:last-child td{border-bottom:none}
+.trend-scroll{overflow-x:auto}
 .banner{border-left:4px solid;padding:.7rem 1rem;border-radius:10px;margin:.7rem 0;
   background:var(--surface)}
 .banner.error{border-color:var(--off);color:var(--off)}
@@ -710,6 +717,233 @@ def _render_shots(
 
 
 # --------------------------------------------------------------------------- #
+# Beans: new-bean starting point + aging
+# --------------------------------------------------------------------------- #
+
+
+def _bean_age_days(roast_date: Optional[str]) -> Optional[int]:
+    """Whole days since a bean's roast date (ISO YYYY-MM-DD), or None if unparseable."""
+    if not roast_date:
+        return None
+    try:
+        d = datetime.date.fromisoformat(roast_date.strip())
+    except (ValueError, AttributeError):
+        return None
+    return (datetime.date.today() - d).days
+
+
+def _aging_banner(bean: Optional[dict[str, Any]]) -> str:
+    """Warn when the active bean is past its prime extraction window (roadmap P4)."""
+    if not bean or not _cfg.bean_max_age_days:
+        return ""
+    age = _bean_age_days(bean.get("roast_date"))
+    if age is None or age <= _cfg.bean_max_age_days:
+        return ""
+    return (
+        f"<div class='banner warn'><b>{html.escape(bean['name'])} is {age} days past roast.</b> "
+        "Past its prime — stale beans degas less and can run faster/flatter. "
+        "Expect to grind a touch finer, and taste for a hollow or muted cup.</div>"
+    )
+
+
+def _select(name: str, options: list[str], selected: str = "", blank: str = "") -> str:
+    """A restricted-vocabulary <select> — keeps bean data unified for matching."""
+    opts = []
+    if blank:
+        opts.append(f"<option value=''>{html.escape(blank)}</option>")
+    for o in options:
+        sel = " selected" if o == selected else ""
+        opts.append(f"<option value='{html.escape(o)}'{sel}>{html.escape(o)}</option>")
+    return f"<select name='{name}'>{''.join(opts)}</select>"
+
+
+def _new_bean_card(active_bean: Optional[dict[str, Any]], has_grinder: bool) -> str:
+    """The 'start a new bean' panel: a structured form → a staged starting profile."""
+    active = ""
+    if active_bean:
+        age = _bean_age_days(active_bean.get("roast_date"))
+        age_txt = f" · {age}d off roast" if age is not None else ""
+        active = (
+            f"<p class='muted' style='font-size:.88rem;margin:0 0 .5rem'>In the hopper: "
+            f"<b>{html.escape(active_bean['name'])}</b> · {html.escape(active_bean['roast_level'])} roast"
+            f"{html.escape(age_txt)}</p>"
+        )
+    grinder_hint = (
+        ""
+        if has_grinder
+        else "<p class='muted' style='font-size:.82rem;margin:.4rem 0 0'>Tip: set your "
+        "grinder in Settings so the grind is given in its own units.</p>"
+    )
+    fld = ("style='font:inherit;color:var(--text);background:var(--surface-2);"
+           "border:1px solid var(--border);border-radius:8px;padding:.4rem .6rem'")
+    return f"""<div class="card">
+      {active}
+      <form method="post" action="/beans/start">
+        <div class="row" style="gap:.5rem">
+          <input name="name" type="text" required placeholder="Bean / origin, e.g. Colombian Huila"
+            {fld} style="flex:1;min-width:12rem;font:inherit;color:var(--text);background:var(--surface-2);
+            border:1px solid var(--border);border-radius:8px;padding:.4rem .6rem">
+          {_select("roast_level", db.ROAST_LEVELS, selected="light")}
+          {_select("process", db.PROCESSES, blank="process (optional)")}
+        </div>
+        <div class="row" style="gap:.5rem;margin-top:.5rem">
+          <label class="muted" style="font-size:.85rem">Roasted <input name="roast_date" type="date" {fld}></label>
+          <label class="muted" style="font-size:.85rem">Dose <input name="dose" type="number" step="0.1"
+            min="5" max="30" placeholder="18" {fld} style="width:5.5rem;font:inherit;color:var(--text);
+            background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:.4rem .6rem"> g</label>
+          <button class="btn" type="submit" title="Generate a starting grind + profile from your similar shots">
+            Generate starting shot</button>
+        </div>
+      </form>
+      <p class="muted" style="font-size:.82rem;margin:.55rem 0 0">Uses your most similar past shots when it
+      can, roast-level first principles when it can't. The result is staged below for you to approve — nothing
+      is pushed automatically.</p>
+      {grinder_hint}
+    </div>"""
+
+
+# --------------------------------------------------------------------------- #
+# Trends: server-rendered SVG (no charting library — light on the Pi)
+# --------------------------------------------------------------------------- #
+
+
+def _rolling_avg(values: list[float], window: int = 7) -> list[float]:
+    """Trailing average over the last `window` points (partial at the start)."""
+    out: list[float] = []
+    for i in range(len(values)):
+        chunk = values[max(0, i - window + 1) : i + 1]
+        out.append(sum(chunk) / len(chunk))
+    return out
+
+
+def _score_chart_svg(scored: list[dict[str, Any]]) -> str:
+    """Score-over-time line + 7-shot rolling average + bean-change markers.
+
+    `scored` is oldest→newest and every row has an integer `score`. Pure SVG with
+    theme-aware CSS-variable colors; each point links to nothing heavier than the
+    shots list. No JS.
+    """
+    W, H = 600, 220
+    pad_l, pad_r, pad_t, pad_b = 34, 12, 12, 26
+    plot_w, plot_h = W - pad_l - pad_r, H - pad_t - pad_b
+    n = len(scored)
+    x_step = plot_w / max(n - 1, 1)
+
+    def x(i: int) -> float:
+        return pad_l + i * x_step
+
+    def y(score: float) -> float:
+        # Score 1..10 → bottom..top of the plot.
+        return pad_t + plot_h - ((score - 1) / 9.0) * plot_h
+
+    # Poor / okay / good bands (score ≤3, 4–6, ≥7).
+    bands = (
+        f"<rect x='{pad_l}' y='{y(10)}' width='{plot_w}' height='{y(7) - y(10)}' fill='var(--hi)' opacity='.10'/>"
+        f"<rect x='{pad_l}' y='{y(7)}' width='{plot_w}' height='{y(4) - y(7)}' fill='var(--lo)' opacity='.10'/>"
+        f"<rect x='{pad_l}' y='{y(4)}' width='{plot_w}' height='{y(1) - y(4)}' fill='var(--off)' opacity='.10'/>"
+    )
+    # Y gridline labels at 2/4/6/8/10.
+    grid = "".join(
+        f"<text x='{pad_l - 6}' y='{y(s) + 3:.1f}' text-anchor='end' font-size='10' "
+        f"fill='currentColor' opacity='.5'>{s}</text>"
+        for s in (2, 4, 6, 8, 10)
+    )
+    scores = [float(r["score"]) for r in scored]
+    pts = " ".join(f"{x(i):.1f},{y(s):.1f}" for i, s in enumerate(scores))
+    dots = "".join(
+        f"<circle cx='{x(i):.1f}' cy='{y(s):.1f}' r='3' fill='var(--accent)'>"
+        f"<title>shot {html.escape(scored[i]['id'])}: {int(s)}/10</title></circle>"
+        for i, s in enumerate(scores)
+    )
+    avg = _rolling_avg(scores)
+    avg_pts = " ".join(f"{x(i):.1f},{y(a):.1f}" for i, a in enumerate(avg))
+    # Bean-change markers: vertical lines where the beans differ from the point before.
+    markers = ""
+    for i in range(1, n):
+        prev, cur = scored[i - 1].get("coffee"), scored[i].get("coffee")
+        if cur and cur != prev:
+            mx = x(i) - x_step / 2
+            markers += (
+                f"<line x1='{mx:.1f}' y1='{pad_t}' x2='{mx:.1f}' y2='{pad_t + plot_h}' "
+                f"stroke='var(--mid)' stroke-width='1' stroke-dasharray='3 3' opacity='.6'>"
+                f"<title>beans changed → {html.escape(str(cur))}</title></line>"
+            )
+    return f"""<svg viewBox="0 0 {W} {H}" role="img" aria-label="Shot score over time"
+        style="width:100%;height:auto;display:block">
+      {bands}{grid}{markers}
+      <polyline points="{pts}" fill="none" stroke="var(--accent)" stroke-width="2"
+        stroke-linejoin="round" stroke-linecap="round"/>
+      <polyline points="{avg_pts}" fill="none" stroke="currentColor" stroke-width="1.5"
+        stroke-dasharray="5 4" opacity=".55"/>
+      {dots}
+    </svg>"""
+
+
+def _trends_table(rows: list[dict[str, Any]]) -> str:
+    """Newest-first table of recent shots: date, score, yield, time, beans."""
+    body = []
+    for r in reversed(rows):  # rows are oldest→newest; show newest first
+        score = r["score"]
+        score_cell = f"{score}/10" if isinstance(score, int) else "—"
+        body.append(
+            "<tr>"
+            f"<td>{html.escape(r['id'])}</td>"
+            f"<td>{html.escape(_fmt_ts(r.get('captured_at')) or '—')}</td>"
+            f"<td style='text-align:right'>{score_cell}</td>"
+            f"<td style='text-align:right'>{html.escape(_fmt_qty(r.get('yield_g'), 'g'))}</td>"
+            f"<td style='text-align:right'>{html.escape(_fmt_qty(r.get('duration_s'), 's'))}</td>"
+            f"<td class='muted'>{html.escape(str(r.get('coffee') or '—'))}</td>"
+            "</tr>"
+        )
+    return (
+        "<div class='card trend-scroll'><table class='trend'>"
+        "<thead><tr><th>Shot</th><th>When</th><th>Score</th>"
+        "<th>Yield</th><th>Time</th><th>Beans</th></tr></thead>"
+        f"<tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
+def _render_trends(rows: list[dict[str, Any]]) -> str:
+    scored = [r for r in rows if isinstance(r["score"], int)]
+    if len(scored) < 3:
+        chart = (
+            "<div class='card muted'>Pull and review a few more shots to see the trend — "
+            f"{len(scored)} scored so far, need at least 3.</div>"
+        )
+    else:
+        chart = (
+            "<div class='card'>"
+            + _score_chart_svg(scored)
+            + "<div class='row muted' style='justify-content:center;gap:1.2rem;font-size:.8rem;"
+            "margin-top:.5rem'>"
+            "<span class='c-accent'>● score</span>"
+            "<span>– – 7-shot average</span>"
+            "<span class='c-mid'>┆ beans changed</span></div></div>"
+        )
+    table = _trends_table(rows) if rows else "<div class='card muted'>No shots yet.</div>"
+    return f"""
+      <header>
+        <a class="brand" href="/"><img src="/icon.png" alt="" width="32" height="32"><h1>crema · trends</h1></a>
+        <a class="btn btn-sm btn-ghost" href="/">← report</a>
+      </header>
+      <h2>Shot score over time</h2>
+      {chart}
+      <h2>Recent shots</h2>
+      {table}
+    """
+
+
+@app.get("/trends", response_class=HTMLResponse)
+async def trends() -> str:
+    conn = await db.connect(_cfg.db_path)
+    try:
+        rows = await db.score_history(conn, limit=40)
+    finally:
+        await conn.close()
+    return _page(_render_trends(rows))
+
+
+# --------------------------------------------------------------------------- #
 # Error handling
 # --------------------------------------------------------------------------- #
 
@@ -830,6 +1064,7 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         autoshare = await db.get_bool_setting(conn, "autoshare", False)
         grinder = (await db.get_setting(conn, "grinder")) or _cfg.grinder
         coffee = (await db.get_setting(conn, "coffee")) or _cfg.coffee
+        active_bean = await db.active_bean(conn)
         reviews_by_shot = await db.latest_reviews_for_shots(conn, [s["id"] for s in shots])
     finally:
         await conn.close()
@@ -872,38 +1107,44 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         <span class="row">{status_pill}<span class="muted" style="font-size:.82rem">{html.escape(host)}</span>
           {"<form method='post' action='/logout' class='inline'><button class='btn btn-sm btn-ghost' type='submit'>Sign out</button></form>" if _cfg.web_password else ""}</span>
       </header>
-      <nav class="toc"><a href="#review">Latest review</a><a href="#edits">Profile edits</a><a href="#shots">Recent shots</a></nav>
+      <nav class="toc"><a href="#newbean">New bean</a><a href="#review">Latest review</a>
+        <a href="#edits">Profile edits</a><a href="#shots">Recent shots</a><a href="/trends">Trends</a></nav>
       {banner}
-      <div class="row" style="margin-top:.9rem">
+      {_aging_banner(active_bean)}
+      <div class="row" style="margin-top:.9rem;gap:.5rem .8rem">
         <form method="post" action="/review" class="inline">
           <button class="btn" type="submit" title="Pull new shots off the machine and review them">Review new shots</button></form>
         {auto_pill}{auto_toggle}
-      </div>
-      <div class="row" style="margin-top:.5rem">
+        <span style="flex-basis:100%;height:0"></span>
         {share_pill}{share_toggle}
       </div>
-      <form method="post" action="/grinder" class="row" style="margin-top:.6rem">
-        <label class="muted" style="font-size:.88rem" for="grinder">Grinder</label>
-        <input id="grinder" name="grinder" type="text" value="{html.escape(grinder)}"
-          placeholder="e.g. Eureka Mignon Specialità, stepless — helps tailor grind advice"
-          style="flex:1;min-width:14rem;font:inherit;color:var(--text);background:var(--surface-2);
-          border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
-        <button class="btn btn-sm btn-ghost" type="submit">Save</button>
-      </form>
-      <form method="post" action="/coffee" class="row" style="margin-top:.6rem">
-        <label class="muted" style="font-size:.88rem" for="coffee">Coffee</label>
-        <input id="coffee" name="coffee" type="text" value="{html.escape(coffee)}"
-          placeholder="e.g. Ethiopian natural, light roast, roasted 2 weeks ago — grounds the advice in your beans"
-          style="flex:1;min-width:14rem;font:inherit;color:var(--text);background:var(--surface-2);
-          border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
-        <button class="btn btn-sm btn-ghost" type="submit">Save</button>
-      </form>
+      <details class="sec" open id="newbean"><summary><h2>Start a new bean</h2></summary>
+        {_new_bean_card(active_bean, bool(grinder))}</details>
       <details class="sec" open id="review"><summary><h2>Latest review</h2></summary>
         {_render_review(review, _profiles_in_shots(shots))}</details>
       <details class="sec" open id="edits"><summary><h2>Profile edits</h2></summary>
         {_render_edits(edits)}</details>
       <details class="sec" open id="shots"><summary><h2>Recent shots</h2></summary>
         {_render_shots(shots, reviews_by_shot)}</details>
+      <details class="sec" id="settings"><summary><h2>Settings — grinder &amp; coffee</h2></summary>
+        <div class="card">
+          <form method="post" action="/grinder" class="row">
+            <label class="muted" style="font-size:.88rem;min-width:4rem" for="grinder">Grinder</label>
+            <input id="grinder" name="grinder" type="text" value="{html.escape(grinder)}"
+              placeholder="e.g. Eureka Mignon Specialità, stepless — helps tailor grind advice"
+              style="flex:1;min-width:12rem;font:inherit;color:var(--text);background:var(--surface-2);
+              border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
+            <button class="btn btn-sm btn-ghost" type="submit">Save</button>
+          </form>
+          <form method="post" action="/coffee" class="row" style="margin-top:.6rem">
+            <label class="muted" style="font-size:.88rem;min-width:4rem" for="coffee">Coffee</label>
+            <input id="coffee" name="coffee" type="text" value="{html.escape(coffee)}"
+              placeholder="Free-text beans — or use ‘Start a new bean’ above to set them from a starting shot"
+              style="flex:1;min-width:12rem;font:inherit;color:var(--text);background:var(--surface-2);
+              border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
+            <button class="btn btn-sm btn-ghost" type="submit">Save</button>
+          </form>
+        </div></details>
     """
     return _page(body)
 
@@ -977,6 +1218,52 @@ async def set_coffee(coffee: str = Form("")) -> RedirectResponse:
         await conn.close()
     note = "Coffee saved — future reviews will tailor advice to these beans." if coffee.strip() else "Coffee cleared."
     return RedirectResponse("/?note=" + quote(note), status_code=303)
+
+
+@app.post("/beans/start")
+async def start_new_bean(
+    name: str = Form(...),
+    roast_level: str = Form(...),
+    process: str = Form(""),
+    roast_date: str = Form(""),
+    dose: str = Form(""),
+) -> RedirectResponse:
+    """Add a bean, make it active, and stage a starting-point profile for approval."""
+    name = name.strip()[:120]
+    if not name:
+        return RedirectResponse("/?error=" + quote("Give the bean a name."), status_code=303)
+    if roast_level not in db.ROAST_LEVELS:
+        return RedirectResponse("/?error=" + quote("Pick a roast level."), status_code=303)
+    dose_val: Optional[float] = None
+    if dose.strip():
+        try:
+            dose_val = float(dose)
+        except ValueError:
+            dose_val = None
+    conn = await db.connect(_cfg.db_path)
+    try:
+        bean_id = await db.insert_bean(
+            conn,
+            name=name,
+            roast_level=roast_level,
+            process=process.strip() or None,
+            roast_date=roast_date.strip() or None,
+        )
+        await db.set_active_bean(conn, bean_id)
+        bean = await db.get_bean(conn, bean_id)
+        result = await generate_starting_point(conn, _cfg, bean, dose_target=dose_val)
+    except Exception as e:  # noqa: BLE001
+        return _redirect_error(e)
+    finally:
+        await conn.close()
+    edit = result["edit"]
+    n_sim = len(result["similar"])
+    basis = f"from {n_sim} similar past shot(s)" if n_sim else "from roast-level first principles"
+    note = (
+        f"Starting point for {name} staged as Draft #{edit['id']} ({basis}). "
+        "Review it under Profile edits, then Approve & push when you're happy."
+    )
+    return RedirectResponse("/?note=" + quote(note) + "#edits", status_code=303)
 
 
 @app.post("/analyze")

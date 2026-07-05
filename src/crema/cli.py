@@ -30,6 +30,7 @@ from .export import (
 from .ingest import ingest_new_shots
 from .push import discard_edit, push_edit
 from .review import review_recent, review_shots
+from .starting import generate_starting_point
 
 app = typer.Typer(add_completion=False, help="Automated GaggiMate shot reviewer.")
 
@@ -330,6 +331,105 @@ def taste(
             if beans is not None:
                 await db.set_shot_coffee(conn, sid, beans.strip()[:300] or None)
             typer.echo(f"Shot {sid} updated — the next review will take it into account.")
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
+def bean(
+    name: Optional[str] = typer.Argument(
+        None, help="Bean/origin name to add and make active (omit to show the active bean)."
+    ),
+    roast: Optional[str] = typer.Option(
+        None, "--roast", help=f"Roast level (required when adding): {' | '.join(db.ROAST_LEVELS)}."
+    ),
+    process: Optional[str] = typer.Option(None, "--process", help="washed | natural | honey | anaerobic | other."),
+    roast_date: Optional[str] = typer.Option(None, "--roast-date", help="Roast date, ISO (YYYY-MM-DD)."),
+    use: bool = typer.Option(True, "--use/--no-use", help="Make this the active bean (default: yes)."),
+) -> None:
+    """Add a bean to your library (and make it active), or show the active bean."""
+
+    async def _run() -> None:
+        cfg = _config()
+        conn = await db.connect(cfg.db_path)
+        try:
+            if name is None:
+                active = await db.active_bean(conn)
+                if active:
+                    typer.echo(f"Active bean: {db.canonical_coffee(active)} (id {active['id']}).")
+                else:
+                    typer.echo("No active bean. Add one: crema bean \"Colombian Huila\" --roast light")
+                return
+            if roast not in db.ROAST_LEVELS:
+                typer.echo(f"--roast is required and must be one of: {', '.join(db.ROAST_LEVELS)}")
+                raise typer.Exit(code=1)
+            bean_id = await db.insert_bean(
+                conn, name=name.strip()[:120], roast_level=roast,
+                process=(process or None), roast_date=(roast_date or None),
+            )
+            if use:
+                await db.set_active_bean(conn, bean_id)
+            bean = await db.get_bean(conn, bean_id)
+            typer.echo(f"Added bean #{bean_id}: {db.canonical_coffee(bean)}" + (" (now active)." if use else "."))
+            if use:
+                typer.echo("Get a starting shot for it with:  crema start")
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
+def beans() -> None:
+    """List the beans in your library, newest first."""
+
+    async def _run() -> None:
+        cfg = _config()
+        conn = await db.connect(cfg.db_path)
+        try:
+            active = await db.active_bean(conn)
+            active_id = active["id"] if active else None
+            rows = await db.list_beans(conn)
+            if not rows:
+                typer.echo("No beans yet. Add one: crema bean \"Colombian Huila\" --roast light")
+                return
+            for b in rows:
+                mark = " *" if b["id"] == active_id else "  "
+                typer.echo(f"{mark}#{b['id']} {db.canonical_coffee(b)}")
+            typer.echo("\n* = active bean")
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+@app.command()
+def start(
+    dose: Optional[float] = typer.Option(None, "--dose", help="Dose (g) you want to use (optional)."),
+) -> None:
+    """Generate a starting-point profile for the active bean, staged for approval."""
+
+    async def _run() -> None:
+        cfg = _config()
+        conn = await db.connect(cfg.db_path)
+        try:
+            bean = await db.active_bean(conn)
+            if bean is None:
+                typer.echo("No active bean. Add one first: crema bean \"Colombian Huila\" --roast light")
+                raise typer.Exit(code=1)
+            typer.echo(f"Finding a starting point for {db.canonical_coffee(bean)}…")
+            result = await generate_starting_point(conn, cfg, bean, dose_target=dose)
+            sp, edit, similar = result["starting"], result["edit"], result["similar"]
+            typer.echo(f"\nGrind: {sp.grind_setting}")
+            typer.echo(f"Dose:  {sp.dose_g:g}g → yield {sp.yield_g:g}g ({sp.ratio})")
+            typer.echo(
+                f"Anchored on {len(similar)} similar past shot(s)."
+                if similar
+                else "No similar past shots — built from roast-level first principles."
+            )
+            typer.echo(f"\nStaged as edit #{edit['id']}. Review it, then:  crema push {edit['id']}")
         finally:
             await conn.close()
 

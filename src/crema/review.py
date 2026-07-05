@@ -76,8 +76,15 @@ async def _review(
 
     newest_shot_id = shots[0]["id"]
     suggestions = result.model_dump()
-    review_id = await db.insert_review(conn, newest_shot_id, config.review_model, suggestions)
     usage = getattr(response, "usage", None)
+    review_id = await db.insert_review(
+        conn,
+        newest_shot_id,
+        config.review_model,
+        suggestions,
+        input_tokens=getattr(usage, "input_tokens", None) if usage else None,
+        output_tokens=getattr(usage, "output_tokens", None) if usage else None,
+    )
     stored = {
         "id": review_id,
         "shot_id": newest_shot_id,
