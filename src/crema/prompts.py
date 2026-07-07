@@ -64,7 +64,13 @@ Also give the most recent shot a 1-10 quality score: 1-3 badly flawed (gushing, 
 choked, severe channeling), 4-6 drinkable but clearly off, 7-8 good, 9-10 dialled \
 in. Judge it from the telemetry (extraction time, flow/pressure shape, channeling \
 risk, temperature stability), plus the barista's tasting notes when present — but \
-never from taste you can't see.\
+never from taste you can't see. The score is the ABSOLUTE quality of that one shot, \
+not a "better than last time" delta: fixing one flaw does not lift the score if a \
+worse flaw has emerged. Always give score_reason — one line naming the single factor \
+that dominates the score. If a previously-flagged flaw has improved but the score is \
+flat or lower, score_reason MUST reconcile the two: credit the improvement and name \
+the new dominant flaw now capping the shot, so the number never contradicts the \
+diagnosis.\
 """
 
 
@@ -87,6 +93,12 @@ class ReviewResult(BaseModel):
     score: int = Field(
         description="Overall quality of the MOST RECENT shot on a 1-10 scale "
         "(1 = badly flawed, 5 = drinkable but off, 8+ = dialled in / excellent). Whole number."
+    )
+    score_reason: str = Field(
+        description="One line explaining what is holding the score where it is: name the "
+        "single dominant factor capping (or lifting) it. When an earlier flaw has improved "
+        "but the score is flat or lower, say so explicitly and name what now dominates — so "
+        "the number never reads as contradicting the diagnosis."
     )
     diagnosis: str = Field(description="One or two sentences: what the recent shots show.")
     grind_change: str = Field(

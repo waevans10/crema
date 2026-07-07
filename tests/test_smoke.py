@@ -21,7 +21,7 @@ from crema.prompts import (
     build_draft_message,
     build_user_message,
 )
-from crema.web.app import _fmt_qty, _fmt_shot_time
+from crema.web.app import _fmt_qty, _fmt_shot_time, _render_review
 
 
 def test_build_user_message_no_shots():
@@ -44,6 +44,7 @@ def test_review_result_validates_a_well_formed_review():
     review = ReviewResult.model_validate(
         {
             "score": 7,
+            "score_reason": "Capped by a slightly short extraction; otherwise clean.",
             "diagnosis": "Even extraction, slightly fast.",
             "grind_change": "grind 1 step finer",
             "dose_yield_change": "none",
@@ -53,7 +54,36 @@ def test_review_result_validates_a_well_formed_review():
         }
     )
     assert review.score == 7
+    assert review.score_reason.startswith("Capped by")
     assert review.profile_changes == []
+
+
+def _review_dict(**suggestions):
+    base = {
+        "score": 5,
+        "score_reason": "Grind correction held; capped by 99.7°C brew temp (target 94°C).",
+        "diagnosis": "Puck now behaving after the grind fix.",
+        "grind_change": "none",
+        "dose_yield_change": "none",
+        "profile_changes": [],
+        "confidence": "high",
+        "rationale": "Resistance is healthy; temperature is the dominant flaw.",
+    }
+    base.update(suggestions)
+    return {"id": 1, "shot_id": "000095", "model": "claude-sonnet-5", "created_at": None, "suggestions": base}
+
+
+def test_render_review_shows_score_reason_when_present():
+    html_out = _render_review(_review_dict(), profiles=[])
+    assert "score-reason" in html_out
+    assert "99.7°C" in html_out
+
+
+def test_render_review_omits_score_reason_when_missing():
+    review = _review_dict()
+    del review["suggestions"]["score_reason"]  # older reviews predate the field
+    html_out = _render_review(review, profiles=[])
+    assert "score-reason" not in html_out
 
 
 def test_fmt_shot_time_formats_and_falls_back():

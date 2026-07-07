@@ -575,12 +575,14 @@ async def score_history(db: aiosqlite.Connection, limit: int = 40) -> list[dict[
         t = json.loads(r["transformed"])
         sugg = reviews.get(r["id"]) or {}
         score = sugg.get("score")
+        reason = sugg.get("score_reason")
         out.append(
             {
                 "id": r["id"],
                 "captured_at": r["captured_at"],
                 "coffee": r["coffee"],
                 "score": score if isinstance(score, int) else None,
+                "score_reason": reason if isinstance(reason, str) else None,
                 # Dose isn't in the telemetry (the machine doesn't know it), so the
                 # trend works with what the shot actually reports: yield + duration.
                 "yield_g": t.get("final_weight_g"),

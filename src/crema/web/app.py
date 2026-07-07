@@ -232,6 +232,7 @@ nav.toc a:hover{color:var(--accent)}
   border:1px solid color-mix(in srgb,currentColor 35%,transparent);
   background:color-mix(in srgb,currentColor 12%,transparent)}
 .score small{font-size:.72rem;font-weight:700;opacity:.75}
+.score-reason{font-size:.85rem;margin-top:.25rem}
 .review-top{display:flex;gap:.9rem;align-items:flex-start}
 textarea{font:inherit;color:var(--text);background:var(--surface-2);width:100%;
   border:1px solid var(--border);border-radius:8px;padding:.45rem .6rem;resize:vertical}
@@ -416,6 +417,10 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
         )
     reviewed_at = _fmt_ts(review.get("created_at"))
     when = f" · reviewed {html.escape(reviewed_at)}" if reviewed_at else ""
+    score_reason = str(s.get("score_reason") or "").strip()
+    score_reason_html = (
+        f"<div class='score-reason muted'>{html.escape(score_reason)}</div>" if score_reason else ""
+    )
     draft_form = _draft_form(review["id"], profiles) if changes else ""
     return f"""<div class="card">
       <div class="review-top">
@@ -425,6 +430,7 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
             <span class="lead">{html.escape(s.get('diagnosis', ''))}</span>
             {_pill(conf + ' confidence', _CONF_CLS.get(conf, 'c-muted')) if conf else ''}
           </div>
+          {score_reason_html}
         </div>
       </div>
       <div class="kv">
@@ -873,7 +879,9 @@ def _score_chart_svg(scored: list[dict[str, Any]]) -> str:
     pts = " ".join(f"{x(i):.1f},{y(s):.1f}" for i, s in enumerate(scores))
     dots = "".join(
         f"<circle cx='{x(i):.1f}' cy='{y(s):.1f}' r='3' fill='var(--accent)'>"
-        f"<title>shot {html.escape(scored[i]['id'])}: {int(s)}/10</title></circle>"
+        f"<title>shot {html.escape(scored[i]['id'])}: {int(s)}/10"
+        f"{' — ' + html.escape(str(scored[i]['score_reason'])) if scored[i].get('score_reason') else ''}"
+        f"</title></circle>"
         for i, s in enumerate(scores)
     )
     avg = _rolling_avg(scores)
