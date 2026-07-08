@@ -7,7 +7,7 @@ from typing import Any, Optional
 import aiosqlite
 from anthropic import AsyncAnthropic
 
-from . import db, notify
+from . import db, notify, tidbyt
 from .config import CremaConfig
 from .prompts import SYSTEM_PROMPT, ReviewResult, build_user_message
 
@@ -90,6 +90,9 @@ async def _review(
         "shot_id": newest_shot_id,
         "model": config.review_model,
         "suggestions": suggestions,
+        # Enriched for notifiers/displays: the reviewed shot's profile + beans.
+        "profile_name": shots[0]["transformed"].get("profile_name"),
+        "bean": shots[0].get("coffee"),
         "usage": {
             "input_tokens": getattr(usage, "input_tokens", None),
             "output_tokens": getattr(usage, "output_tokens", None),
@@ -97,6 +100,7 @@ async def _review(
         if usage
         else None,
     }
-    # Fire the Discord notification (best-effort; no-op if unconfigured).
+    # Fire the notifiers (best-effort; each no-ops if unconfigured).
     await notify.notify_review(config, stored)
+    await tidbyt.push_review(config, stored)
     return stored

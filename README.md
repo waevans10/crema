@@ -104,6 +104,11 @@ profile edit — only to pull new shots or push an approved edit back.
   `crema autoshare on`) and crema shares your anonymized shot data after each
   review, growing the open dataset. See
   [Sharing shot data](#sharing-shot-data-opt-in).
+- **Show your latest shot on a Tidbyt (opt-in)** — set
+  `CREMA_TIDBYT_API_TOKEN` + `CREMA_TIDBYT_DEVICE_ID` and each reviewed shot's
+  score and profile name gets pushed to your Tidbyt pixel display. Free (a local
+  render + one push — no Claude cost) and pure-Python, so it runs on the same
+  armv7 Pi. Setup in [deploy/PI_SETUP.md](deploy/PI_SETUP.md).
 
 Grind and dose/yield are suggested as text (manual bench changes); only profile
 changes get drafted and pushed.
@@ -320,6 +325,8 @@ All via `.env` (see [`.env.example`](.env.example)):
 | `CREMA_RETENTION_DAYS` | prune shots older than this (0 = keep all) | `30` |
 | `CREMA_AUTOREVIEW` | default for timer auto-review (UI toggle overrides) | `false` |
 | `CREMA_DISCORD_WEBHOOK_URL` | Discord webhook for shot score notifications | — |
+| `CREMA_TIDBYT_API_TOKEN` / `CREMA_TIDBYT_DEVICE_ID` | push each reviewed shot to a Tidbyt (both required to enable) | — |
+| `CREMA_TIDBYT_INSTALLATION_ID` | Tidbyt app slot to update | `crema` |
 | `CREMA_WEB_USER` / `CREMA_WEB_PASSWORD` | web login (blank pw = no login; password managers supported) | `crema` / — |
 | `CREMA_DB_PATH` | SQLite path | `./crema.db` |
 | `CREMA_HOST` / `CREMA_PORT` | web bind | `127.0.0.1` / `8765` |

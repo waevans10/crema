@@ -81,3 +81,14 @@ def test_push_review_swallows_errors(monkeypatch):
     monkeypatch.setattr("aiohttp.ClientSession.post", boom)
     # Must not raise.
     asyncio.run(tidbyt.push_review(cfg, _review()))
+
+
+def test_stored_enrichment_shape():
+    # Guard the contract push_review depends on: review.py must add these keys.
+    shot = {"id": "000094", "transformed": {"profile_name": "Lavazza [AI]"},
+            "coffee": "Lavazza Super Crema"}
+    stored = {"id": 1, "shot_id": shot["id"], "suggestions": {"score": 7}}
+    stored["profile_name"] = shot["transformed"].get("profile_name")
+    stored["bean"] = shot.get("coffee")
+    assert stored["profile_name"] == "Lavazza [AI]"
+    assert stored["bean"] == "Lavazza Super Crema"

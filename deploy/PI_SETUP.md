@@ -87,6 +87,25 @@ ssh -L 8765:localhost:8765 pi@<pi-host>
 
 (Match the left/right port to `CREMA_PORT` if you changed it.)
 
+## Optional: show your latest shot on a Tidbyt
+
+If you have a Tidbyt, crema can push each reviewed shot's score + profile name to
+it. It's free (a local render + one API push — no Claude cost) and off unless
+configured — works on the same 32-bit armv7 Pi (no extra system packages).
+
+1. In the Tidbyt mobile app, get your **device ID** and **API token** (device
+   settings → "Get API key", or api.tidbyt.com).
+2. Add to your `.env` on the Pi:
+
+   ```bash
+   CREMA_TIDBYT_API_TOKEN=your-token
+   CREMA_TIDBYT_DEVICE_ID=your-device-id
+   ```
+
+3. Restart the service: `sudo systemctl restart crema-web.service`.
+
+The display updates each time a shot is reviewed. Unset either value to turn it off.
+
 ## Updating later
 
 Push changes from your Mac (`git push`), then on the Pi:
