@@ -8,10 +8,12 @@ render (Pillow) so it runs on the 32-bit armv7 Pi crema targets — no pixlet.
 
 from __future__ import annotations
 
+import base64
 import io
 import logging
-from typing import Optional
+from typing import Any, Optional
 
+import aiohttp
 from PIL import Image, ImageDraw, ImageFont
 
 from .config import CremaConfig
@@ -80,3 +82,39 @@ def render_frame(score: Optional[int], profile: Optional[str],
     buf = io.BytesIO()
     img.save(buf, format="WEBP", lossless=True)
     return buf.getvalue()
+
+
+_PUSH_URL = "https://api.tidbyt.com/v0/devices/{device_id}/push"
+
+
+async def push_review(config: CremaConfig, review: dict[str, Any]) -> None:
+    """Render a reviewed shot and push it to the Tidbyt. No-op if unconfigured."""
+    token = config.tidbyt_api_token
+    device = config.tidbyt_device_id
+    if not token or not device:
+        return
+
+    try:
+        s = review.get("suggestions") or {}
+        raw = s.get("score")
+        score = max(1, min(10, int(raw))) if isinstance(raw, (int, float)) else None
+        frame = render_frame(
+            score,
+            review.get("profile_name"),
+            bean=review.get("bean"),
+        )
+        payload = {
+            "image": base64.b64encode(frame).decode("ascii"),
+            "installationID": config.tidbyt_installation_id,
+            "background": False,
+        }
+        url = _PUSH_URL.format(device_id=device)
+        headers = {"Authorization": f"Bearer {token}"}
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, headers=headers, json=payload) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    _log.warning("Tidbyt push failed (%s): %s", resp.status, body[:200])
+    except Exception:  # noqa: BLE001 — a display problem must never break a review
+        _log.warning("Tidbyt push errored; skipping.", exc_info=True)

@@ -99,6 +99,15 @@ class CremaConfig(BaseSettings):
     # reviewed, with its 1-10 score and the diagnosis. Empty = disabled.
     discord_webhook_url: str = ""
 
+    # Optional Tidbyt push. When BOTH the api token and device id are set, crema
+    # renders each reviewed shot's score + profile name and pushes it to your
+    # Tidbyt. Empty = disabled. Find both in the Tidbyt app / api.tidbyt.com.
+    tidbyt_api_token: str = ""
+    tidbyt_device_id: str = ""
+    # Which app slot on the device to replace on each push (re-pushing the same id
+    # updates the one slot instead of piling up).
+    tidbyt_installation_id: str = "crema"
+
     def gaggimate(self) -> GaggimateConfig:
         """Build the vendored device config (reads its own GAGGIMATE_* env vars)."""
         return GaggimateConfig()
