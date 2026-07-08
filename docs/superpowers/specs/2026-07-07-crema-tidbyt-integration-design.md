@@ -40,88 +40,100 @@ The frame needs, per latest review:
 | Field | Source |
 |---|---|
 | `score` (1–10 int) | `review["suggestions"]["score"]` (clamped 1–10, same as notify.py) |
-| `profile_name` | profile label of the reviewed shot (the human name shown in the report / used by notify.py; the `[AI]` profile name when the shot ran an AI profile) |
-| `bean` (optional, for context line) | current bean / `coffee` string for that shot |
-| `reviewed_at` | `review["created_at"]` |
+| `profile_name` | the reviewed shot's `transformed["profile_name"]` — present for **both** GaggiMate and Gaggiuino (`transform_shot_for_ai` emits it; Gaggiuino maps `profile.name` → `profile_name`) |
+| `bean` (optional, for context line) | the reviewed shot's `coffee` string (`shots[0]["coffee"]`) |
 
-**Open item for planning:** pin the exact source of `profile_name` for both
-GaggiMate and Gaggiuino shots (Gaggiuino exposes `profile_name`; confirm the
-GaggiMate shot's profile label field). Reuse whatever notify.py / the web report
-already display so all three surfaces agree.
+**Resolved (was open at spec draft):** `profile_name` is uniform across both device
+types — no per-device branching needed. `review.py` enriches the `stored` dict with
+`profile_name` + `bean` from `shots[0]` (already in scope) so the push helper keeps
+notify.py's `(config, review)` interface and needs no DB handle.
 
 ## Components
 
-New module `src/crema/tidbyt.py`, plus a Starlark app file and config keys.
+New module `src/crema/tidbyt.py`, plus config keys. No `.star` file and no
+`pixlet` binary (see Rendering approach).
 
-1. **`crema.star`** (`apps/tidbyt/crema.star`) — the Tidbyt app. Renders a 64×32
-   frame: large score number (color-coded red<4 / amber<7 / green≥7, matching
-   notify.py's `_score_color`), the profile name scrolling beneath, a small "espresso"
-   glyph, and a dim "stale" dot if the data is older than a configurable age.
-   Takes `score`, `profile`, `bean`, `age` as `pixlet render` config params — no
-   secrets and no network calls inside the app.
+1. **`src/crema/tidbyt.py`** — two responsibilities:
+   - `render_frame(score, profile, bean, stale) -> bytes` — draws a 64×32 WebP with
+     Pillow: large score number (color-coded red<4 / amber<7 / green≥7, matching
+     notify.py's `_score_color`), the profile name below in a small font wrapped to
+     two lines and ellipsized if long, a dim corner dot when `stale`. Pure/offline,
+     easily unit-tested.
+   - `push_review(config, review)` — no-op unless Tidbyt config is set; renders the
+     frame, base64-encodes it, and `POST`s to Tidbyt's push API. Best-effort: any
+     failure (config missing, render error, HTTP error) is logged at warning and
+     swallowed, exactly like `notify_review`.
 
-2. **`src/crema/tidbyt.py`** — `push_review(config, review)`:
-   - No-op unless Tidbyt config is set (`CREMA_TIDBYT_API_TOKEN` +
-     `CREMA_TIDBYT_DEVICE_ID`).
-   - Builds config params from the review, shells out to `pixlet render crema.star
-     <params> -o <tmp.webp>`, then `pixlet push --api-token … --installation-id crema
-     <device-id> <tmp.webp>`.
-   - Best-effort: any failure (missing pixlet, render error, HTTP error) is logged
-     at warning and swallowed.
+2. **Tidbyt push API** — `POST https://api.tidbyt.com/v0/devices/{device_id}/push`,
+   header `Authorization: Bearer {api_token}`, JSON body
+   `{"image": "<base64 webp>", "installationID": "<installation_id>", "background": false}`.
+   Re-pushing the same `installationID` replaces crema's single slot in the device's
+   app rotation (no pile-up).
 
-3. **Config** (`src/crema/config.py`) — new optional keys, mirroring the Discord
-   pattern:
-   - `tidbyt_api_token` ← `CREMA_TIDBYT_API_TOKEN`
-   - `tidbyt_device_id` ← `CREMA_TIDBYT_DEVICE_ID`
-   - `tidbyt_installation_id` ← `CREMA_TIDBYT_INSTALLATION_ID` (default `crema`)
-   - `pixlet_bin` ← `CREMA_PIXLET_BIN` (default `pixlet`)
+3. **Config** (`src/crema/config.py`, `pydantic-settings`) — new optional keys
+   auto-loaded from the `CREMA_` prefix, mirroring the Discord pattern:
+   - `tidbyt_api_token` ← `CREMA_TIDBYT_API_TOKEN` (default `""`)
+   - `tidbyt_device_id` ← `CREMA_TIDBYT_DEVICE_ID` (default `""`)
+   - `tidbyt_installation_id` ← `CREMA_TIDBYT_INSTALLATION_ID` (default `"crema"`)
 
-4. **Call site** — wherever `notify_review` is currently awaited after a review is
-   stored, add the `push_review` call alongside it.
+4. **Call site** (`src/crema/review.py`) — enrich `stored` with `profile_name` +
+   `bean` from `shots[0]`, then `await tidbyt.push_review(config, stored)` right
+   after the existing `notify.notify_review(config, stored)`.
 
 ## Rendering approach
 
-**Recommended: ship `crema.star` and drive it with the `pixlet` binary.** This is
-the canonical Tidbyt artifact — the community expects a `.star` app, and pixlet
-gives proper scrolling/fonts for the profile name. Cost: a per-arch Go binary
-(`pixlet`) must be present on the Pi; `deploy/PI_SETUP.md` gains a one-line install
-note, and the feature no-ops cleanly if `pixlet` is absent.
+**Decision: render in pure Python (Pillow) and POST to Tidbyt's HTTP push API.
+No `pixlet`, no `.star`.**
 
-**Alternative considered (Pillow → Tidbyt push API):** render the frame in pure
-Python and POST base64 WebP to `api.tidbyt.com/v0/devices/{id}/push`. Zero binary
-dep, but no reusable `.star` for the community and hand-rolled text layout. Rejected
-as the default because the community deliverable *is* a Starlark app. **This is the
-one decision to confirm at spec review.**
+The spec draft recommended shipping a `crema.star` driven by the `pixlet` binary
+(the canonical Tidbyt artifact). **That was reversed on a hardware finding:** crema's
+target/reference device is a **32-bit armv7 Pi (Pi Zero 2 W)** and `pixlet` ships no
+armv7 build (only darwin/linux amd64 + arm64), so the pixlet path would not run on
+crema's own hardware. Pillow renders a static WebP on any architecture, adds no Go
+toolchain, and matches crema's Python-only, light-footprint ethos.
+
+Trade-off accepted: a static frame can't marquee-scroll a long profile name, so long
+names wrap to two lines and ellipsize. Animated-WebP scrolling and/or an optional
+community `.star` can come later; neither is needed for v1.
 
 ## Error handling
 
 - Missing/partial Tidbyt config → silent no-op (feature off by default).
-- `pixlet` not installed → log once at warning, no-op.
-- Render/push failure → log at warning, swallow; the review and all other channels
-  proceed unaffected (same contract as notify.py).
-- Display staleness → the app self-indicates with a dim dot using the `age` param;
-  crema never blanks the screen.
+- Render error (bad/missing fields) → log at warning, no-op; never raises.
+- Push HTTP failure/timeout → log at warning, swallow; the review and all other
+  channels proceed unaffected (same contract as notify.py).
+- Display staleness → the frame self-indicates with a dim corner dot via the
+  `stale` flag; crema never blanks the screen.
+
+## Dependency
+
+Add **`Pillow`** to `pyproject.toml` dependencies (with WebP support, which the
+standard wheels include). No `pixlet`, no Go toolchain, no new system packages.
 
 ## Testing
 
-- Unit: `push_review` no-ops when config unset; builds correct pixlet arg vectors
-  from a sample review (monkeypatch the subprocess, assert argv); clamps score;
-  handles missing `score`/`profile_name`; swallows a raised subprocess error.
-- `crema.star`: `pixlet render` succeeds locally with representative params
-  (checked in CI only if pixlet available; otherwise a smoke note in PI_SETUP).
+- Unit (`tests/`, matching the existing offline style — no network, no device):
+  - `push_review` no-ops when config unset (patch the HTTP call, assert it is never
+    invoked).
+  - `render_frame` returns non-empty bytes that start with a WebP signature for a
+    representative review; handles a missing/None `score` (defaults to a neutral
+    render) and a long `profile` (no exception).
+  - `push_review` builds the correct URL + `Authorization` header + JSON body from a
+    sample config/review (patch the HTTP client, assert the request args).
+  - `push_review` swallows a raised HTTP error without propagating.
 - No live device or API token needed in tests.
 
 ## Docs
 
-- `deploy/PI_SETUP.md`: install pixlet + set the two env vars + how to find the
-  Tidbyt device ID / API token.
+- `deploy/PI_SETUP.md`: set the `CREMA_TIDBYT_*` env vars + how to find the Tidbyt
+  device ID / API token (from the Tidbyt app → device settings / `api.tidbyt.com`).
 - `README.md`: short "Show your latest shot on a Tidbyt" opt-in section, with the
   same cost/privacy honesty as crema's other integrations (this one is free — no
-  API cost; local render + a push to Tidbyt's API).
+  Claude/API cost; a local Pillow render + one push to Tidbyt's API).
 - `.env.example`: the new `CREMA_TIDBYT_*` keys, commented and off by default.
 
 ## Success criteria
 
-With the env vars set on the Pi and pixlet installed, finishing a review causes the
+With the `CREMA_TIDBYT_*` env vars set on the Pi, finishing a review causes the
 Tidbyt to show that shot's score and profile name within one review cycle; with the
-vars unset, crema behaves exactly as before and all tests pass.
+vars unset, crema behaves exactly as before and all existing + new tests pass.
