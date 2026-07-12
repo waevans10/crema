@@ -10,6 +10,7 @@ from anthropic import AsyncAnthropic
 from . import db, notify, tidbyt
 from .config import CremaConfig
 from .prompts import SYSTEM_PROMPT, ReviewResult, build_user_message
+from .scoring import execution_score
 
 
 async def review_recent(conn: aiosqlite.Connection, config: CremaConfig) -> Optional[dict[str, Any]]:
@@ -76,6 +77,13 @@ async def _review(
 
     newest_shot_id = shots[0]["id"]
     suggestions = result.model_dump()
+    # Claude still diagnoses and explains the shot, but the charted score is a
+    # repeatable execution measure rather than a variable model judgement.
+    execution = execution_score(shots[0]["transformed"])
+    suggestions["model_score"] = suggestions["score"]
+    suggestions["score"] = round(execution["score"])
+    suggestions["execution_score"] = execution
+    suggestions["score_reason"] = execution["reason"]
     usage = getattr(response, "usage", None)
     review_id = await db.insert_review(
         conn,

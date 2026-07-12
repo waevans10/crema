@@ -21,6 +21,7 @@ from crema.prompts import (
     build_draft_message,
     build_user_message,
 )
+from crema.scoring import execution_score
 from crema.web.app import _fmt_qty, _fmt_shot_time, _render_review
 
 
@@ -154,6 +155,11 @@ def test_build_user_message_includes_tasting_notes_when_set():
     assert msg.count("TASTING NOTES") == 1
 
 
+def test_build_user_message_includes_structured_cup_rating():
+    msg = build_user_message([{"id": "shot-a", "transformed": {}, "cup_rating": 4}])
+    assert "BARISTA CUP RATING: 4/5" in msg
+
+
 def test_build_user_message_includes_grinder_when_set():
     shots = [{"id": "1", "transformed": {}}]
     assert "GRINDER: Niche Zero" in build_user_message(shots, grinder="Niche Zero")
@@ -250,6 +256,43 @@ def test_tasting_notes_round_trip_and_migration(tmp_path):
             await conn.close()
 
     asyncio.run(_run())
+
+
+def test_cup_rating_round_trip_and_validation(tmp_path):
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            await crema_db.upsert_shot(conn, "000001", {"time": 28.0})
+            assert await crema_db.set_shot_cup_rating(conn, "000001", 4)
+            shot = await crema_db.get_shot(conn, "000001")
+            assert shot is not None and shot["cup_rating"] == 4
+            assert await crema_db.set_shot_cup_rating(conn, "000001", None)
+            assert (await crema_db.get_shot(conn, "000001"))["cup_rating"] is None
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_execution_score_is_deterministic_and_channeling_is_dominant():
+    shot = {
+        "diagnostics": {
+            "channeling": {"channeling_risk": "VERY_HIGH"},
+            "temperature": {"stability_std_c": 1.0},
+            "profile_compliance": {"pressure_rmse_bar": 1.0, "flow_rmse_ml_s": 1.0},
+            "resistance": {"annotations": {"erosion": "VERY_HIGH"}},
+        }
+    }
+    score = execution_score(shot)
+    assert score == execution_score(shot)  # no model or random input involved
+    assert score["score"] < 5
+    assert score["components"]["channeling"] < score["components"]["flow_adherence"]
+
+
+def test_execution_score_marks_missing_diagnostics_as_low_confidence():
+    score = execution_score({})
+    assert score["score"] == 5.0
+    assert score["confidence"] == "low"
 
 
 def test_latest_reviews_for_shots_returns_latest_per_shot(tmp_path):

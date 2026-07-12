@@ -407,6 +407,8 @@ def build_user_message(
             lines.append(f"COFFEE (this shot): {shot['coffee']}")
         if shot.get("tasting_notes"):
             lines.append(f"TASTING NOTES (from the barista, on this shot): {shot['tasting_notes']}")
+        if shot.get("cup_rating"):
+            lines.append(f"BARISTA CUP RATING: {shot['cup_rating']}/5 (ground truth for enjoyment)")
         if prior_reviews and idx > 0 and shot["id"] in prior_reviews:
             lines.append(
                 "REVIEW GIVEN AFTER THIS SHOT: " + _compact_review(prior_reviews[shot["id"]])

@@ -388,13 +388,13 @@ def _fmt_ts(ts: Any) -> str:
 
 
 def _score_badge(score: Any) -> str:
-    """The review's 1-10 shot score as a colored badge (red/amber/green bands)."""
+    """The deterministic 1-10 execution score as a colored badge."""
     try:
         n = int(score)
     except (TypeError, ValueError):
         return ""
     cls = "c-off" if n <= 3 else "c-lo" if n <= 6 else "c-hi"
-    return f"<span class='score {cls}' title='Shot quality score'>{n}<small>/10</small></span>"
+    return f"<span class='score {cls}' title='Machine execution score'>{n}<small>/10</small></span>"
 
 
 def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, str]]) -> str:
@@ -421,6 +421,13 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
     score_reason_html = (
         f"<div class='score-reason muted'>{html.escape(score_reason)}</div>" if score_reason else ""
     )
+    execution = s.get("execution_score") or {}
+    component_html = ""
+    if isinstance(execution, dict) and execution.get("components"):
+        bits = ", ".join(
+            f"{str(k).replace('_', ' ')} {float(v):+.1f}" for k, v in execution["components"].items()
+        )
+        component_html = f"<div class='muted' style='font-size:.8rem;margin-top:.25rem'>Execution factors: {html.escape(bits)}</div>"
     draft_form = _draft_form(review["id"], profiles) if changes else ""
     return f"""<div class="card">
       <div class="review-top">
@@ -431,6 +438,7 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
             {_pill(conf + ' confidence', _CONF_CLS.get(conf, 'c-muted')) if conf else ''}
           </div>
           {score_reason_html}
+          {component_html}
         </div>
       </div>
       <div class="kv">
@@ -702,12 +710,15 @@ def _render_shots(
     for sh in shots:
         t = sh["transformed"]
         notes = sh.get("tasting_notes") or ""
+        cup_rating = sh.get("cup_rating")
         shot_coffee = sh.get("coffee") or ""
         summary_bits = []
         if shot_coffee:
             summary_bits.append(f"Beans: {html.escape(shot_coffee)}")
         if notes:
             summary_bits.append(f"Tasting notes: {html.escape(notes)}")
+        if cup_rating:
+            summary_bits.append(f"Cup rating: {cup_rating}/5")
         summary = " · ".join(summary_bits) or "Add beans / tasting notes for this shot"
         hint = _taste_hint(sh, (reviews_by_shot or {}).get(sh["id"]))
         hint_html = (
@@ -734,6 +745,9 @@ def _render_shots(
                     style="margin-top:.4rem;width:100%;font:inherit;color:var(--text);background:var(--surface-2);
                     border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
                   {_taste_chips_html()}
+                  <label class="muted" style="display:block;font-size:.82rem;margin-top:.45rem">How was the cup?
+                    <select name="cup_rating"><option value="">not rated</option>{''.join(f"<option value='{n}'{' selected' if cup_rating == n else ''}>{n}/5</option>" for n in range(1, 6))}</select>
+                  </label>
                   <textarea name="notes" rows="2" style="margin-top:.4rem" placeholder="e.g. sour and thin — goes into the next review as taste feedback">{html.escape(notes)}</textarea>
                   <button class="btn btn-sm btn-ghost" type="submit">Save</button>
                 </form>
@@ -844,7 +858,7 @@ def _rolling_avg(values: list[float], window: int = 7) -> list[float]:
 
 
 def _score_chart_svg(scored: list[dict[str, Any]]) -> str:
-    """Score-over-time line + 7-shot rolling average + bean-change markers.
+    """Execution-score line + 7-shot rolling average + bean-change markers.
 
     `scored` is oldest→newest and every row has an integer `score`. Pure SVG with
     theme-aware CSS-variable colors; each point links to nothing heavier than the
@@ -897,7 +911,7 @@ def _score_chart_svg(scored: list[dict[str, Any]]) -> str:
                 f"stroke='var(--mid)' stroke-width='1' stroke-dasharray='3 3' opacity='.6'>"
                 f"<title>beans changed → {html.escape(str(cur))}</title></line>"
             )
-    return f"""<svg viewBox="0 0 {W} {H}" role="img" aria-label="Shot score over time"
+    return f"""<svg viewBox="0 0 {W} {H}" role="img" aria-label="Shot execution score over time"
         style="width:100%;height:auto;display:block">
       {bands}{grid}{markers}
       <polyline points="{pts}" fill="none" stroke="var(--accent)" stroke-width="2"
@@ -926,7 +940,7 @@ def _trends_table(rows: list[dict[str, Any]]) -> str:
         )
     return (
         "<div class='card trend-scroll'><table class='trend'>"
-        "<thead><tr><th>Shot</th><th>When</th><th>Score</th>"
+        "<thead><tr><th>Shot</th><th>When</th><th>Execution</th>"
         "<th>Yield</th><th>Time</th><th>Beans</th></tr></thead>"
         f"<tbody>{''.join(body)}</tbody></table></div>"
     )
@@ -945,7 +959,7 @@ def _render_trends(rows: list[dict[str, Any]]) -> str:
             + _score_chart_svg(scored)
             + "<div class='row muted' style='justify-content:center;gap:1.2rem;font-size:.8rem;"
             "margin-top:.5rem'>"
-            "<span class='c-accent'>● score</span>"
+            "<span class='c-accent'>● execution score</span>"
             "<span>– – 7-shot average</span>"
             "<span class='c-mid'>┆ beans changed</span></div></div>"
         )
@@ -955,7 +969,7 @@ def _render_trends(rows: list[dict[str, Any]]) -> str:
         <a class="brand" href="/"><img src="/icon.png" alt="" width="32" height="32"><h1>crema · trends</h1></a>
         <a class="btn btn-sm btn-ghost" href="/">← report</a>
       </header>
-      <h2>Shot score over time</h2>
+      <h2>Execution score over time</h2>
       {chart}
       <h2>Recent shots</h2>
       {table}
@@ -1327,7 +1341,7 @@ async def run_analyze(shot_id: str = Form(...)) -> RedirectResponse:
 
 @app.post("/shots/{shot_id}/tasting-notes")
 async def save_tasting_notes(
-    shot_id: str, notes: str = Form(""), coffee: str = Form("")
+    shot_id: str, notes: str = Form(""), coffee: str = Form(""), cup_rating: str = Form("")
 ) -> RedirectResponse:
     """Save the barista's tasting notes and/or beans on a shot for future reviews."""
     conn = await db.connect(_cfg.db_path)
@@ -1335,6 +1349,8 @@ async def save_tasting_notes(
         found = await db.set_shot_tasting_notes(conn, shot_id, notes.strip()[:500] or None)
         if found:
             await db.set_shot_coffee(conn, shot_id, coffee.strip()[:300] or None)
+            rating = int(cup_rating) if cup_rating in {"1", "2", "3", "4", "5"} else None
+            await db.set_shot_cup_rating(conn, shot_id, rating)
     finally:
         await conn.close()
     if not found:
