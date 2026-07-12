@@ -90,8 +90,33 @@ CREATE TABLE IF NOT EXISTS beans (
     process      TEXT,                   -- optional: washed|natural|honey|anaerobic|other
     roast_date   TEXT,                   -- optional ISO date (YYYY-MM-DD)
     notes        TEXT,
+    target_dose_g REAL,                  -- preferred recipe dose
+    target_yield_g REAL,                 -- preferred beverage weight
+    target_profile_id TEXT,               -- preferred machine profile
+    cup_style     TEXT,                   -- e.g. sweet and syrupy
     created_at   REAL NOT NULL DEFAULT (unixepoch('now'))
 );
+
+CREATE TABLE IF NOT EXISTS experiments (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    bean_id           INTEGER,
+    source_review_id  INTEGER,
+    change_note       TEXT NOT NULL,
+    baseline_score    INTEGER,
+    baseline_cup      INTEGER,
+    status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
+    created_at        REAL NOT NULL DEFAULT (unixepoch('now')),
+    closed_at         REAL,
+    FOREIGN KEY (bean_id) REFERENCES beans(id),
+    FOREIGN KEY (source_review_id) REFERENCES reviews(id)
+);
+
+CREATE TABLE IF NOT EXISTS experiment_shots (
+    experiment_id INTEGER NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    shot_id       TEXT NOT NULL REFERENCES shots(id) ON DELETE CASCADE,
+    PRIMARY KEY (experiment_id, shot_id)
+);
+CREATE INDEX IF NOT EXISTS idx_experiment_shots_shot ON experiment_shots(shot_id);
 """
 
 # The roast levels the UI/CLI accept — a fixed vocabulary keeps bean data unified
@@ -139,6 +164,16 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         # Link to a structured bean (beans table), when one is active at ingest.
         # Nullable — legacy shots and freetext-only setups just leave it NULL.
         await db.execute("ALTER TABLE shots ADD COLUMN bean_id INTEGER")
+    async with db.execute("PRAGMA table_info(beans)") as cur:
+        bean_cols = {row["name"] async for row in cur}
+    for column, definition in (
+        ("target_dose_g", "REAL"),
+        ("target_yield_g", "REAL"),
+        ("target_profile_id", "TEXT"),
+        ("cup_style", "TEXT"),
+    ):
+        if column not in bean_cols:
+            await db.execute(f"ALTER TABLE beans ADD COLUMN {column} {definition}")
     async with db.execute("PRAGMA table_info(reviews)") as cur:
         review_cols = {row["name"] async for row in cur}
     if "input_tokens" not in review_cols:
@@ -506,6 +541,10 @@ def _bean_row(row: aiosqlite.Row) -> dict[str, Any]:
         "process": row["process"],
         "roast_date": row["roast_date"],
         "notes": row["notes"],
+        "target_dose_g": row["target_dose_g"],
+        "target_yield_g": row["target_yield_g"],
+        "target_profile_id": row["target_profile_id"],
+        "cup_style": row["cup_style"],
         "created_at": row["created_at"],
     }
 
@@ -532,6 +571,72 @@ async def get_bean(db: aiosqlite.Connection, bean_id: int) -> Optional[dict[str,
     async with db.execute("SELECT * FROM beans WHERE id = ?", (bean_id,)) as cur:
         row = await cur.fetchone()
     return _bean_row(row) if row else None
+
+
+async def set_bean_recipe(
+    db: aiosqlite.Connection, bean_id: int, dose_g: Optional[float], yield_g: Optional[float],
+    profile_id: Optional[str], cup_style: Optional[str],
+) -> bool:
+    """Set the preferred recipe used to assess shots of this bean."""
+    cur = await db.execute(
+        "UPDATE beans SET target_dose_g=?, target_yield_g=?, target_profile_id=?, cup_style=? WHERE id=?",
+        (dose_g, yield_g, profile_id or None, cup_style or None, bean_id),
+    )
+    await db.commit()
+    return bool(cur.rowcount)
+
+
+async def start_experiment(
+    db: aiosqlite.Connection, source_review_id: int, bean_id: Optional[int], change_note: str,
+    baseline_score: Optional[int], baseline_cup: Optional[int],
+) -> int:
+    """Start a single active dial-in experiment; close any prior active one."""
+    await db.execute("UPDATE experiments SET status='closed', closed_at=unixepoch('now') WHERE status='active'")
+    cur = await db.execute(
+        "INSERT INTO experiments (bean_id, source_review_id, change_note, baseline_score, baseline_cup) VALUES (?, ?, ?, ?, ?)",
+        (bean_id, source_review_id, change_note, baseline_score, baseline_cup),
+    )
+    await db.commit()
+    return int(cur.lastrowid)
+
+
+async def assign_shot_to_active_experiment(
+    db: aiosqlite.Connection, shot_id: str, bean_id: Optional[int]
+) -> None:
+    """Attach a newly ingested matching-bean shot to the current experiment."""
+    async with db.execute("SELECT id, bean_id FROM experiments WHERE status='active' ORDER BY id DESC LIMIT 1") as cur:
+        experiment = await cur.fetchone()
+    if not experiment or (experiment["bean_id"] is not None and experiment["bean_id"] != bean_id):
+        return
+    await db.execute("INSERT OR IGNORE INTO experiment_shots (experiment_id, shot_id) VALUES (?, ?)", (experiment["id"], shot_id))
+    await db.commit()
+
+
+async def close_experiment(db: aiosqlite.Connection, experiment_id: int) -> bool:
+    cur = await db.execute("UPDATE experiments SET status='closed', closed_at=unixepoch('now') WHERE id=?", (experiment_id,))
+    await db.commit()
+    return bool(cur.rowcount)
+
+
+async def active_experiment(db: aiosqlite.Connection) -> Optional[dict[str, Any]]:
+    """Return the active experiment plus its captured shots and latest outcomes."""
+    async with db.execute("SELECT * FROM experiments WHERE status='active' ORDER BY id DESC LIMIT 1") as cur:
+        row = await cur.fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    async with db.execute(
+        "SELECT s.id, s.cup_rating, s.transformed FROM experiment_shots es JOIN shots s ON s.id=es.shot_id "
+        "WHERE es.experiment_id=? ORDER BY COALESCE(s.captured_at, s.created_at) ASC", (row["id"],)
+    ) as cur:
+        shots = await cur.fetchall()
+    shot_ids = [s["id"] for s in shots]
+    reviews = await latest_reviews_for_shots(db, shot_ids)
+    result["shots"] = [
+        {"id": s["id"], "cup_rating": s["cup_rating"], "score": (reviews.get(s["id"]) or {}).get("score")}
+        for s in shots
+    ]
+    return result
 
 
 async def list_beans(db: aiosqlite.Connection, limit: int = 50) -> list[dict[str, Any]]:

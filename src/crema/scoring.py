@@ -17,7 +17,7 @@ def _num(value: Any) -> float | None:
         return None
 
 
-def execution_score(transformed: dict[str, Any]) -> dict[str, Any]:
+def execution_score(transformed: dict[str, Any], recipe: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return a reproducible 1–10 execution score and its evidence.
 
     Penalties are deliberately capped. A single noisy sensor cannot turn an
@@ -59,6 +59,18 @@ def execution_score(transformed: dict[str, Any]) -> dict[str, Any]:
     erosion = resistance.get("annotations", {}).get("erosion") if isinstance(resistance, dict) else diagnostics.get("annotations", {}).get("resistance_erosion")
     if erosion in {"HIGH", "VERY_HIGH"}:
         penalties["resistance_erosion"] = 0.7 if erosion == "HIGH" else 1.2
+
+    # Recipe targets are optional: absent targets never impose a generic espresso
+    # ideal. When set, they make the assessment specific to this bean/recipe.
+    target_yield = _num((recipe or {}).get("target_yield_g"))
+    actual_yield = _num(transformed.get("final_weight_g"))
+    if target_yield and actual_yield is not None:
+        deviation = abs(actual_yield - target_yield) / target_yield
+        if deviation > 0.10:
+            penalties["recipe_yield"] = min(1.2, round((deviation - 0.10) * 3.0, 2))
+    target_profile = (recipe or {}).get("target_profile_id")
+    if target_profile and str(target_profile) != str(transformed.get("profile_id")):
+        penalties["recipe_profile"] = 0.5
 
     confidence = "high"
     if risk == "INSUFFICIENT_DATA":

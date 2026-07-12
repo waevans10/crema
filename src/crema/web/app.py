@@ -843,6 +843,110 @@ def _new_bean_card(active_bean: Optional[dict[str, Any]], has_grinder: bool) -> 
     </div>"""
 
 
+def _recipe_card(bean: Optional[dict[str, Any]], profiles: list[dict[str, str]]) -> str:
+    """Per-bean recipe targets; blank values deliberately remain non-prescriptive."""
+    if not bean:
+        return "<div class='card muted'>Add a bean first to save its preferred dose, yield, profile, and cup style.</div>"
+    options = "<option value=''>any profile</option>" + "".join(
+        f"<option value='{html.escape(p['id'])}'{' selected' if bean.get('target_profile_id') == p['id'] else ''}>{html.escape(p['label'])}</option>"
+        for p in profiles
+    )
+    dose = "" if bean.get("target_dose_g") is None else str(bean["target_dose_g"])
+    yield_g = "" if bean.get("target_yield_g") is None else str(bean["target_yield_g"])
+    return f"""<div class="card">
+      <p class="muted" style="margin:0 0 .5rem">Targets for <b>{html.escape(bean['name'])}</b>. They make execution scoring recipe-specific; leave a field blank when it is not a hard target.</p>
+      <form method="post" action="/beans/{bean['id']}/recipe" class="row">
+        <label class="muted" style="font-size:.85rem">Dose <input name="dose_g" type="number" min="1" max="40" step=".1" value="{html.escape(dose)}" style="width:4.6rem"> g</label>
+        <label class="muted" style="font-size:.85rem">Yield <input name="yield_g" type="number" min="1" max="150" step=".1" value="{html.escape(yield_g)}" style="width:4.6rem"> g</label>
+        <label class="muted" style="font-size:.85rem">Profile <select name="profile_id">{options}</select></label>
+        <input name="cup_style" value="{html.escape(bean.get('cup_style') or '')}" placeholder="preferred cup, e.g. sweet and syrupy" style="flex:1;min-width:12rem;font:inherit;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
+        <button class="btn btn-sm btn-ghost" type="submit">Save recipe</button>
+      </form>
+    </div>"""
+
+
+def _experiment_card(experiment: Optional[dict[str, Any]], review: Optional[dict[str, Any]]) -> str:
+    if experiment:
+        shots = experiment["shots"]
+        scores = [s["score"] for s in shots if isinstance(s.get("score"), int)]
+        cups = [s["cup_rating"] for s in shots if isinstance(s.get("cup_rating"), int)]
+        score_delta = (sum(scores) / len(scores) - experiment["baseline_score"]) if scores and experiment.get("baseline_score") else None
+        cup_delta = (sum(cups) / len(cups) - experiment["baseline_cup"]) if cups and experiment.get("baseline_cup") else None
+        outcome = []
+        if score_delta is not None:
+            outcome.append(f"execution {score_delta:+.1f}")
+        if cup_delta is not None:
+            outcome.append(f"cup {cup_delta:+.1f}/5")
+        outcome_text = " · ".join(outcome) if outcome else "Pull and rate follow-up shots to measure the result."
+        ids = ", ".join(s["id"] for s in shots) or "none yet"
+        return f"""<div class="card">
+          <div class="row" style="justify-content:space-between"><span>{_pill('experiment active', 'c-accent', dot=True)} <b>{html.escape(experiment['change_note'])}</b></span>
+          <form method="post" action="/experiments/{experiment['id']}/close" class="inline"><button class="btn btn-sm btn-ghost">Finish experiment</button></form></div>
+          <p class="muted" style="margin:.45rem 0 0">Follow-up shots: {html.escape(ids)}. Outcome vs baseline: <b>{html.escape(outcome_text)}</b></p>
+        </div>"""
+    if not review:
+        return "<div class='card muted'>Review a shot first, then record one deliberate change as an experiment.</div>"
+    return f"""<div class="card">
+      <p class="muted" style="margin:0 0 .5rem">Make one deliberate change. New shots for this bean will be captured automatically until you finish the experiment.</p>
+      <form method="post" action="/experiments/start" class="row">
+        <input type="hidden" name="review_id" value="{review['id']}">
+        <input name="change_note" required placeholder="e.g. ground 2 clicks finer" style="flex:1;min-width:14rem;font:inherit;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
+        <button class="btn btn-sm" type="submit">Start experiment</button>
+      </form>
+    </div>"""
+
+
+def _comparison_select(name: str, shots: list[dict[str, Any]], selected: str) -> str:
+    return f"<select name='{name}'>" + "".join(
+        f"<option value='{html.escape(s['id'])}'{' selected' if s['id'] == selected else ''}>Shot {html.escape(s['id'])} · {_fmt_shot_time(s)}</option>"
+        for s in shots
+    ) + "</select>"
+
+
+def _comparison_metrics(shot: dict[str, Any], review: Optional[dict[str, Any]]) -> str:
+    t = shot["transformed"]
+    diag = t.get("diagnostics") or {}
+    channel = diag.get("channeling", {}).get("channeling_risk") if isinstance(diag.get("channeling"), dict) else diag.get("channeling_risk")
+    temp = diag.get("temperature", {}).get("stability_std_c") if isinstance(diag.get("temperature"), dict) else diag.get("temperature_stability_c")
+    score = (review or {}).get("score", "—")
+    return f"""<div class="card" style="flex:1;min-width:15rem"><b>Shot {html.escape(shot['id'])}</b>
+      <div class="kv"><span class="k">Execution</span><span>{html.escape(str(score))}/10</span>
+      <span class="k">Cup</span><span>{html.escape(str(shot.get('cup_rating') or '—'))}/5</span>
+      <span class="k">Profile</span><span>{html.escape(str(t.get('profile_name') or '—'))}</span>
+      <span class="k">Time / yield</span><span>{html.escape(_fmt_qty(t.get('duration_seconds'), 's'))} · {html.escape(_fmt_qty(t.get('final_weight_g'), 'g'))}</span>
+      <span class="k">Channeling</span><span>{html.escape(str(channel or '—'))}</span>
+      <span class="k">Temp stability</span><span>{html.escape(str(temp if temp is not None else '—'))}</span></div>
+      <p class="muted" style="font-size:.84rem">{html.escape(str((review or {}).get('score_reason') or 'Not reviewed yet.'))}</p></div>"""
+
+
+def _comparison_plot(left: dict[str, Any], right: dict[str, Any], left_review: Optional[dict[str, Any]], right_review: Optional[dict[str, Any]]) -> str:
+    """A compact visual read of the three comparable outcomes, not fake curves."""
+    def value(shot: dict[str, Any], review: Optional[dict[str, Any]], key: str) -> float:
+        if key == "execution":
+            raw = (review or {}).get("score")
+        else:
+            raw = shot["transformed"].get("duration_seconds" if key == "time" else "final_weight_g")
+        try:
+            return max(0.0, float(raw))
+        except (TypeError, ValueError):
+            return 0.0
+    rows = [("Execution /10", "execution", 10.0), ("Time /60s", "time", 60.0), ("Yield /60g", "yield", 60.0)]
+    svg_rows = []
+    for i, (label, key, cap) in enumerate(rows):
+        y = 26 + i * 46
+        a, b = min(value(left, left_review, key), cap), min(value(right, right_review, key), cap)
+        svg_rows.append(
+            f"<text x='0' y='{y - 5}' fill='currentColor' font-size='11' opacity='.7'>{label}</text>"
+            f"<rect x='112' y='{y - 15}' width='390' height='10' rx='5' fill='var(--surface-2)'/>"
+            f"<rect x='112' y='{y - 15}' width='{390 * a / cap:.1f}' height='4' rx='2' fill='var(--accent)'/>"
+            f"<rect x='112' y='{y - 9}' width='{390 * b / cap:.1f}' height='4' rx='2' fill='var(--mid)'/>"
+            f"<text x='510' y='{y - 5}' fill='currentColor' font-size='11'>{a:g} · {b:g}</text>"
+        )
+    return f"""<div class="card"><div class="muted" style="font-size:.8rem;margin-bottom:.25rem"><span class="c-accent">━ left shot</span> · <span class="c-mid">━ right shot</span></div>
+      <svg viewBox="0 0 560 132" role="img" aria-label="Comparison of execution score, shot time, and yield" style="width:100%;height:auto;display:block">{''.join(svg_rows)}</svg>
+    </div>"""
+
+
 # --------------------------------------------------------------------------- #
 # Trends: server-rendered SVG (no charting library — light on the Pi)
 # --------------------------------------------------------------------------- #
@@ -986,6 +1090,36 @@ async def trends() -> str:
     return _page(_render_trends(rows))
 
 
+@app.get("/compare", response_class=HTMLResponse)
+async def compare(left: str = "", right: str = "") -> str:
+    """Side-by-side comparison of two stored shots and their latest reviews."""
+    conn = await db.connect(_cfg.db_path)
+    try:
+        shots = await db.recent_shots(conn, limit=40)
+        reviews = await db.latest_reviews_for_shots(conn, [s["id"] for s in shots])
+    finally:
+        await conn.close()
+    if not shots:
+        return _page("<div class='card muted'>No shots to compare yet.</div>")
+    left = left if any(s["id"] == left for s in shots) else shots[min(1, len(shots) - 1)]["id"]
+    right = right if any(s["id"] == right for s in shots) else shots[0]["id"]
+    left_shot = next(s for s in shots if s["id"] == left)
+    right_shot = next(s for s in shots if s["id"] == right)
+    body = f"""
+      <header><a class="brand" href="/"><img src="/icon.png" alt="" width="32" height="32"><h1>crema · compare</h1></a>
+        <a class="btn btn-sm btn-ghost" href="/">← report</a></header>
+      <div class="card"><form method="get" action="/compare" class="row">
+        <label class="muted">Earlier {_comparison_select('left', shots, left)}</label>
+        <label class="muted">Later {_comparison_select('right', shots, right)}</label>
+        <button class="btn btn-sm" type="submit">Compare</button>
+      </form></div>
+      {_comparison_plot(left_shot, right_shot, reviews.get(left), reviews.get(right))}
+      <div class="row" style="align-items:stretch">{_comparison_metrics(left_shot, reviews.get(left))}{_comparison_metrics(right_shot, reviews.get(right))}</div>
+      <p class="muted" style="font-size:.85rem">Compare the execution and cup scores together: a better machine score with a flat cup rating means the next experiment should change strategy, not merely repeat the same adjustment.</p>
+    """
+    return _page(body)
+
+
 # --------------------------------------------------------------------------- #
 # Error handling
 # --------------------------------------------------------------------------- #
@@ -1108,6 +1242,7 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         grinder = (await db.get_setting(conn, "grinder")) or _cfg.grinder
         coffee = (await db.get_setting(conn, "coffee")) or _cfg.coffee
         active_bean = await db.active_bean(conn)
+        experiment = await db.active_experiment(conn)
         reviews_by_shot = await db.latest_reviews_for_shots(conn, [s["id"] for s in shots])
     finally:
         await conn.close()
@@ -1150,8 +1285,8 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         <span class="row">{status_pill}<span class="muted" style="font-size:.82rem">{html.escape(host)}</span>
           {"<form method='post' action='/logout' class='inline'><button class='btn btn-sm btn-ghost' type='submit'>Sign out</button></form>" if _cfg.web_password else ""}</span>
       </header>
-      <nav class="toc"><a href="#newbean">New bean</a><a href="#review">Latest review</a>
-        <a href="#edits">Profile edits</a><a href="#shots">Recent shots</a><a href="/trends">Trends</a></nav>
+      <nav class="toc"><a href="#newbean">New bean</a><a href="#recipe">Recipe</a><a href="#experiment">Experiment</a><a href="#review">Latest review</a>
+        <a href="#edits">Profile edits</a><a href="#shots">Recent shots</a><a href="/compare">Compare</a><a href="/trends">Trends</a></nav>
       {banner}
       {_aging_banner(active_bean)}
       <div class="row" style="margin-top:.9rem;gap:.5rem .8rem">
@@ -1163,6 +1298,10 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
       </div>
       <details class="sec" open id="newbean"><summary><h2>Start a new bean</h2></summary>
         {_new_bean_card(active_bean, bool(grinder))}</details>
+      <details class="sec" open id="recipe"><summary><h2>Recipe targets</h2></summary>
+        {_recipe_card(active_bean, _profiles_in_shots(shots))}</details>
+      <details class="sec" open id="experiment"><summary><h2>Dial-in experiment</h2></summary>
+        {_experiment_card(experiment, review)}</details>
       <details class="sec" open id="review"><summary><h2>Latest review</h2></summary>
         {_render_review(review, _profiles_in_shots(shots))}</details>
       <details class="sec" open id="edits"><summary><h2>Profile edits</h2></summary>
@@ -1277,6 +1416,56 @@ async def set_coffee(coffee: str = Form("")) -> RedirectResponse:
         await conn.close()
     note = "Coffee saved — future reviews will tailor advice to these beans." if coffee.strip() else "Coffee cleared."
     return RedirectResponse("/?note=" + quote(note), status_code=303)
+
+
+@app.post("/beans/{bean_id}/recipe")
+async def save_recipe(
+    bean_id: int, dose_g: str = Form(""), yield_g: str = Form(""), profile_id: str = Form(""), cup_style: str = Form("")
+) -> RedirectResponse:
+    def number(raw: str, maximum: float) -> Optional[float]:
+        try:
+            value = float(raw)
+            return value if 0 < value <= maximum else None
+        except ValueError:
+            return None
+    conn = await db.connect(_cfg.db_path)
+    try:
+        saved = await db.set_bean_recipe(conn, bean_id, number(dose_g, 40), number(yield_g, 150), profile_id.strip(), cup_style.strip()[:160])
+    finally:
+        await conn.close()
+    if not saved:
+        return RedirectResponse("/?error=" + quote("Bean not found."), status_code=303)
+    return RedirectResponse("/?note=" + quote("Recipe targets saved — future reviews of this bean score against them.") + "#recipe", status_code=303)
+
+
+@app.post("/experiments/start")
+async def start_experiment(review_id: int = Form(...), change_note: str = Form(...)) -> RedirectResponse:
+    note = change_note.strip()[:240]
+    if not note:
+        return RedirectResponse("/?error=" + quote("Describe the one change you made."), status_code=303)
+    conn = await db.connect(_cfg.db_path)
+    try:
+        review = await db.get_review(conn, review_id)
+        if not review:
+            return RedirectResponse("/?error=" + quote("Review not found."), status_code=303)
+        shot = await db.get_shot(conn, review["shot_id"])
+        if not shot:
+            return RedirectResponse("/?error=" + quote("Source shot not found."), status_code=303)
+        score = review["suggestions"].get("score")
+        await db.start_experiment(conn, review_id, shot.get("bean_id"), note, score if isinstance(score, int) else None, shot.get("cup_rating"))
+    finally:
+        await conn.close()
+    return RedirectResponse("/?note=" + quote("Experiment started. New matching-bean shots will be tracked automatically.") + "#experiment", status_code=303)
+
+
+@app.post("/experiments/{experiment_id}/close")
+async def finish_experiment(experiment_id: int) -> RedirectResponse:
+    conn = await db.connect(_cfg.db_path)
+    try:
+        await db.close_experiment(conn, experiment_id)
+    finally:
+        await conn.close()
+    return RedirectResponse("/?note=" + quote("Experiment finished. Start another when you make the next deliberate change.") + "#experiment", status_code=303)
 
 
 @app.post("/beans/start")

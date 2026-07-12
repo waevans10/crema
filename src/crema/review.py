@@ -79,7 +79,8 @@ async def _review(
     suggestions = result.model_dump()
     # Claude still diagnoses and explains the shot, but the charted score is a
     # repeatable execution measure rather than a variable model judgement.
-    execution = execution_score(shots[0]["transformed"])
+    recipe = await db.get_bean(conn, shots[0]["bean_id"]) if shots[0].get("bean_id") else None
+    execution = execution_score(shots[0]["transformed"], recipe=recipe)
     suggestions["model_score"] = suggestions["score"]
     suggestions["score"] = round(execution["score"])
     suggestions["execution_score"] = execution

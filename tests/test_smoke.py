@@ -295,6 +295,20 @@ def test_execution_score_marks_missing_diagnostics_as_low_confidence():
     assert score["confidence"] == "low"
 
 
+def test_execution_score_applies_only_explicit_recipe_targets():
+    shot = {"profile_id": "p1", "final_weight_g": 50.0, "diagnostics": {
+        "channeling": {"channeling_risk": "LOW"},
+        "temperature": {"stability_std_c": 0.1},
+        "profile_compliance": {"pressure_rmse_bar": 0.1, "flow_rmse_ml_s": 0.1},
+        "resistance": {"annotations": {"erosion": "LOW"}},
+    }}
+    baseline = execution_score(shot)
+    recipe = execution_score(shot, {"target_yield_g": 36.0, "target_profile_id": "p2"})
+    assert baseline["score"] == 10.0
+    assert recipe["score"] < baseline["score"]
+    assert "recipe_yield" in recipe["components"] and "recipe_profile" in recipe["components"]
+
+
 def test_latest_reviews_for_shots_returns_latest_per_shot(tmp_path):
     """Two reviews on one shot → the later one wins; unknown ids are absent."""
 
@@ -604,6 +618,32 @@ def test_score_history_pairs_scores_and_orders_oldest_first(tmp_path):
             assert [h["id"] for h in hist] == ["000001", "000002"]  # oldest → newest
             assert hist[0]["score"] is None and hist[1]["score"] == 8
             assert hist[1]["yield_g"] == 38.0
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_recipe_and_experiment_capture_matching_followup_shots(tmp_path):
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            bean_id = await crema_db.insert_bean(conn, "Test bean", "medium")
+            assert await crema_db.set_bean_recipe(conn, bean_id, 18.0, 36.0, "profile-a", "sweet")
+            bean = await crema_db.get_bean(conn, bean_id)
+            assert bean["target_yield_g"] == 36.0 and bean["target_profile_id"] == "profile-a"
+            await crema_db.upsert_shot(conn, "000001", {}, bean_id=bean_id)
+            review_id = await crema_db.insert_review(conn, "000001", "m", {"score": 6})
+            experiment_id = await crema_db.start_experiment(conn, review_id, bean_id, "1 click finer", 6, 3)
+            await crema_db.upsert_shot(conn, "000002", {}, bean_id=bean_id)
+            await crema_db.assign_shot_to_active_experiment(conn, "000002", bean_id)
+            await crema_db.upsert_shot(conn, "000003", {}, bean_id=bean_id + 1)
+            await crema_db.assign_shot_to_active_experiment(conn, "000003", bean_id + 1)
+            active = await crema_db.active_experiment(conn)
+            assert active is not None and active["id"] == experiment_id
+            assert [s["id"] for s in active["shots"]] == ["000002"]
+            assert await crema_db.close_experiment(conn, experiment_id)
+            assert await crema_db.active_experiment(conn) is None
         finally:
             await conn.close()
 
