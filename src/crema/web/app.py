@@ -848,7 +848,7 @@ def _recipe_card(bean: Optional[dict[str, Any]], profiles: list[dict[str, str]])
     if not bean:
         return "<div class='card muted'>Add a bean first to save its preferred dose, yield, profile, and cup style.</div>"
     options = "<option value=''>any profile</option>" + "".join(
-        f"<option value='{html.escape(p['id'])}'{' selected' if bean.get('target_profile_id') == p['id'] else ''}>{html.escape(p['label'])}</option>"
+        f"<option value='{html.escape(p['id'])}'{' selected' if bean.get('target_profile_id') == p['id'] else ''}>{html.escape(p['name'])}</option>"
         for p in profiles
     )
     dose = "" if bean.get("target_dose_g") is None else str(bean["target_dose_g"])

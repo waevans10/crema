@@ -309,6 +309,15 @@ def test_execution_score_applies_only_explicit_recipe_targets():
     assert "recipe_yield" in recipe["components"] and "recipe_profile" in recipe["components"]
 
 
+def test_recipe_card_uses_the_profile_helper_display_name():
+    from crema.web.app import _recipe_card
+    html_out = _recipe_card(
+        {"id": 1, "name": "Bean", "target_profile_id": "p1"},
+        [{"id": "p1", "name": "Daily driver"}],
+    )
+    assert "Daily driver" in html_out and "selected" in html_out
+
+
 def test_latest_reviews_for_shots_returns_latest_per_shot(tmp_path):
     """Two reviews on one shot → the later one wins; unknown ids are absent."""
 
