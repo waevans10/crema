@@ -32,6 +32,21 @@ time.
   `CREMA_BEAN_MAX_AGE_DAYS`) show a heads-up in the web UI.
 - **Token usage is now persisted** with each review, for after-the-fact cost
   audits (in keeping with crema's cost-transparency promise).
+- **Deterministic execution scoring.** The 1–10 chart score now comes from
+  repeatable telemetry penalties (channeling, temperature stability, profile
+  adherence, resistance erosion), rather than varying model judgment. Claude's
+  assessment is retained for diagnosis; a separate 1–5 **cup rating** records
+  what the coffee actually tasted like.
+- **Recipe targets per bean.** Save a preferred dose, yield, profile, and cup
+  style for each bean. Yield and profile penalties apply only when you have
+  explicitly set those targets, so crema never forces a generic espresso recipe.
+- **Dial-in experiments and outcome tracking.** Record one deliberate change,
+  then crema automatically groups new matching-bean shots until you finish the
+  experiment and reports execution/cup-rating movement from the baseline.
+- **Shot comparison (`/compare`).** Select any two shots for a compact visual
+  comparison of execution, time, and yield, plus side-by-side diagnostics.
+- **Tidbyt display (opt-in).** Push the latest reviewed shot's score and profile
+  to a Tidbyt display from the same Pi; it is a local render plus one API push.
 
 **Changed**
 
@@ -50,5 +65,6 @@ time.
   so an edit with many profile changes can't bloat the window.
 - Best-effort profile-cache failures during ingest are logged at debug level
   instead of being swallowed silently.
+- Recipe-target profile selection no longer fails when rendering the report.
 
 [1.1.0]: https://github.com/waevans10/crema/releases/tag/v1.1.0
