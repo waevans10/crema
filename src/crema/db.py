@@ -632,8 +632,16 @@ async def active_experiment(db: aiosqlite.Connection) -> Optional[dict[str, Any]
         shots = await cur.fetchall()
     shot_ids = [s["id"] for s in shots]
     reviews = await latest_reviews_for_shots(db, shot_ids)
+    # A self-guided experiment must stay useful without any Claude calls. Fall
+    # back to the local execution score when a follow-up has not been reviewed.
+    recipe = await get_bean(db, row["bean_id"]) if row["bean_id"] else None
+    from .scoring import execution_score
     result["shots"] = [
-        {"id": s["id"], "cup_rating": s["cup_rating"], "score": (reviews.get(s["id"]) or {}).get("score")}
+        {
+            "id": s["id"],
+            "cup_rating": s["cup_rating"],
+            "score": (reviews.get(s["id"]) or {}).get("score", round(execution_score(json.loads(s["transformed"]), recipe)["score"])),
+        }
         for s in shots
     ]
     return result

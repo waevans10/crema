@@ -659,6 +659,39 @@ def test_recipe_and_experiment_capture_matching_followup_shots(tmp_path):
     asyncio.run(_run())
 
 
+def test_manual_experiment_outcomes_do_not_require_an_ai_review(tmp_path):
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            bean_id = await crema_db.insert_bean(conn, "Test bean", "medium")
+            telemetry = {"diagnostics": {
+                "channeling": {"channeling_risk": "LOW"},
+                "temperature": {"stability_std_c": 0.1},
+                "profile_compliance": {"pressure_rmse_bar": 0.1, "flow_rmse_ml_s": 0.1},
+                "resistance": {"annotations": {"erosion": "LOW"}},
+            }}
+            await crema_db.upsert_shot(conn, "000001", telemetry, bean_id=bean_id)
+            await crema_db.start_experiment(conn, None, bean_id, "one click finer", 10, None)
+            await crema_db.upsert_shot(conn, "000002", telemetry, bean_id=bean_id)
+            await crema_db.assign_shot_to_active_experiment(conn, "000002", bean_id)
+            active = await crema_db.active_experiment(conn)
+            assert active is not None and active["shots"] == [{"id": "000002", "cup_rating": None, "score": 10}]
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_manual_guidance_is_local_and_offers_an_experiment():
+    from crema.web.app import _manual_guidance
+    html_out = _manual_guidance(
+        {"id": "001", "transformed": {"diagnostics": None}}, None
+    )
+    assert "Read the shot yourself" in html_out
+    assert "Start my experiment" in html_out
+    assert "Claude" not in html_out
+
+
 def test_review_persists_token_usage(tmp_path):
     async def _run() -> None:
         conn = await crema_db.connect(tmp_path / "crema.db")

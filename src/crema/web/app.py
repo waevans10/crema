@@ -31,6 +31,7 @@ from ..export import SHARE_TERMS, maybe_autoshare, record_autoshare_consent
 from ..ingest import ingest_new_shots
 from ..push import discard_edit, push_edit
 from ..review import review_recent, review_shots
+from ..scoring import execution_score
 from ..starting import generate_starting_point
 
 _cfg = CremaConfig()
@@ -896,6 +897,40 @@ def _experiment_card(experiment: Optional[dict[str, Any]], review: Optional[dict
     </div>"""
 
 
+def _manual_guidance(shot: Optional[dict[str, Any]], recipe: Optional[dict[str, Any]]) -> str:
+    """A local, explainable next move that never calls an AI model."""
+    if not shot:
+        return "<div class='card muted'>Pull a shot to start a self-guided iteration.</div>"
+    t = shot["transformed"]
+    execution = execution_score(t, recipe=recipe)
+    diag = t.get("diagnostics") or {}
+    channel = diag.get("channeling", {}).get("channeling_risk") if isinstance(diag.get("channeling"), dict) else diag.get("channeling_risk")
+    target_yield = recipe.get("target_yield_g") if recipe else None
+    actual_yield = t.get("final_weight_g")
+    if execution["confidence"] == "low":
+        move = "Collect another complete shot before changing a variable; the telemetry is too sparse to guide a clean experiment."
+    elif channel in {"HIGH", "VERY_HIGH"}:
+        move = "Keep the recipe steady and improve puck prep first: distribution, tamp consistency, and basket cleanliness. Judge the next shot before changing the profile."
+    elif target_yield and actual_yield is not None and float(actual_yield) > float(target_yield) * 1.1:
+        move = f"The yield ran long ({actual_yield:g}g vs {float(target_yield):g}g target). Stop closer to target before changing grind or profile."
+    elif target_yield and actual_yield is not None and float(actual_yield) < float(target_yield) * 0.9:
+        move = f"The yield stopped short ({actual_yield:g}g vs {float(target_yield):g}g target). Reach the target before changing grind or profile."
+    else:
+        move = "Choose one variable only for the next shot—grind, yield, temperature, or puck prep—then record it as an experiment."
+    components = ", ".join(f"{k.replace('_', ' ')} {float(v):+.1f}" for k, v in execution["components"].items()) or "no material telemetry penalties"
+    return f"""<div class="card">
+      <div class="row" style="justify-content:space-between"><span class="lead">Read the shot yourself</span>{_score_badge(round(execution['score']))}</div>
+      <p class="muted" style="margin:.2rem 0 .5rem">{html.escape(execution['reason'])} · {html.escape(execution['confidence'])} confidence</p>
+      <p style="margin:.35rem 0"><b>First-principles next move:</b> {html.escape(move)}</p>
+      <p class="muted" style="font-size:.8rem;margin:.35rem 0">Evidence: {html.escape(components)}</p>
+      <form method="post" action="/experiments/manual/start" class="row" style="margin-top:.55rem">
+        <input type="hidden" name="shot_id" value="{html.escape(shot['id'])}">
+        <input name="change_note" required placeholder="What one change will you make? e.g. 2 clicks finer" style="flex:1;min-width:14rem;font:inherit;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
+        <button class="btn btn-sm" type="submit">Start my experiment</button>
+      </form>
+    </div>"""
+
+
 def _comparison_select(name: str, shots: list[dict[str, Any]], selected: str) -> str:
     return f"<select name='{name}'>" + "".join(
         f"<option value='{html.escape(s['id'])}'{' selected' if s['id'] == selected else ''}>Shot {html.escape(s['id'])} · {_fmt_shot_time(s)}</option>"
@@ -1285,13 +1320,13 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         <span class="row">{status_pill}<span class="muted" style="font-size:.82rem">{html.escape(host)}</span>
           {"<form method='post' action='/logout' class='inline'><button class='btn btn-sm btn-ghost' type='submit'>Sign out</button></form>" if _cfg.web_password else ""}</span>
       </header>
-      <nav class="toc"><a href="#newbean">New bean</a><a href="#recipe">Recipe</a><a href="#experiment">Experiment</a><a href="#review">Latest review</a>
+      <nav class="toc"><a href="#newbean">New bean</a><a href="#recipe">Recipe</a><a href="#manual">Dial in myself</a><a href="#experiment">Experiment</a><a href="#review">AI assist</a>
         <a href="#edits">Profile edits</a><a href="#shots">Recent shots</a><a href="/compare">Compare</a><a href="/trends">Trends</a></nav>
       {banner}
       {_aging_banner(active_bean)}
       <div class="row" style="margin-top:.9rem;gap:.5rem .8rem">
         <form method="post" action="/review" class="inline">
-          <button class="btn" type="submit" title="Pull new shots off the machine and review them">Review new shots</button></form>
+          <button class="btn" type="submit" title="Pull new shots off the machine and ask Claude for a review">Ask AI to review new shots</button></form>
         {auto_pill}{auto_toggle}
         <span style="flex-basis:100%;height:0"></span>
         {share_pill}{share_toggle}
@@ -1300,9 +1335,11 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         {_new_bean_card(active_bean, bool(grinder))}</details>
       <details class="sec" open id="recipe"><summary><h2>Recipe targets</h2></summary>
         {_recipe_card(active_bean, _profiles_in_shots(shots))}</details>
+      <details class="sec" open id="manual"><summary><h2>Dial in myself</h2></summary>
+        {_manual_guidance(shots[0] if shots else None, active_bean)}</details>
       <details class="sec" open id="experiment"><summary><h2>Dial-in experiment</h2></summary>
         {_experiment_card(experiment, review)}</details>
-      <details class="sec" open id="review"><summary><h2>Latest review</h2></summary>
+      <details class="sec" open id="review"><summary><h2>AI assist</h2></summary>
         {_render_review(review, _profiles_in_shots(shots))}</details>
       <details class="sec" open id="edits"><summary><h2>Profile edits</h2></summary>
         {_render_edits(edits)}</details>
@@ -1456,6 +1493,25 @@ async def start_experiment(review_id: int = Form(...), change_note: str = Form(.
     finally:
         await conn.close()
     return RedirectResponse("/?note=" + quote("Experiment started. New matching-bean shots will be tracked automatically.") + "#experiment", status_code=303)
+
+
+@app.post("/experiments/manual/start")
+async def start_manual_experiment(shot_id: str = Form(...), change_note: str = Form(...)) -> RedirectResponse:
+    """Start a self-guided experiment without calling Claude or needing a review."""
+    note = change_note.strip()[:240]
+    if not note:
+        return RedirectResponse("/?error=" + quote("Describe the one change you will make."), status_code=303)
+    conn = await db.connect(_cfg.db_path)
+    try:
+        shot = await db.get_shot(conn, shot_id)
+        if not shot:
+            return RedirectResponse("/?error=" + quote("Source shot not found."), status_code=303)
+        recipe = await db.get_bean(conn, shot["bean_id"]) if shot.get("bean_id") else None
+        baseline = round(execution_score(shot["transformed"], recipe=recipe)["score"])
+        await db.start_experiment(conn, None, shot.get("bean_id"), note, baseline, shot.get("cup_rating"))
+    finally:
+        await conn.close()
+    return RedirectResponse("/?note=" + quote("Self-guided experiment started — no AI call was made.") + "#experiment", status_code=303)
 
 
 @app.post("/experiments/{experiment_id}/close")
