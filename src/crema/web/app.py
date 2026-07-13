@@ -409,7 +409,7 @@ def _score_badge(score: Any) -> str:
     return f"<span class='score {cls}' title='Machine execution score'>{n}<small>/10</small></span>"
 
 
-def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, str]]) -> str:
+def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, str]], include_draft: bool = True) -> str:
     if review is None:
         return "<div class='card muted'>No review yet — click <b>Review new shots</b> after pulling a shot.</div>"
     s = review["suggestions"]
@@ -440,7 +440,7 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
             f"{str(k).replace('_', ' ')} {float(v):+.1f}" for k, v in execution["components"].items()
         )
         component_html = f"<div class='muted' style='font-size:.8rem;margin-top:.25rem'>Execution factors: {html.escape(bits)}</div>"
-    draft_form = _draft_form(review["id"], profiles) if changes else ""
+    draft_form = _draft_form(review["id"], profiles) if changes and include_draft else ""
     return f"""<div class="card">
       <div class="review-top">
         {_score_badge(s.get('score'))}
@@ -465,6 +465,30 @@ def _render_review(review: Optional[dict[str, Any]], profiles: list[dict[str, st
         shot {html.escape(review['shot_id'])}{when} · {html.escape(review['model'])}</p>
       {draft_form}
     </div>"""
+
+
+def _profile_recommendation(
+    review: Optional[dict[str, Any]], current_shot: Optional[dict[str, Any]],
+    edits: list[dict[str, Any]], profiles: list[dict[str, str]],
+) -> str:
+    """Put the relevant draft/push action on Now, after cup feedback exists."""
+    if not review or not current_shot or review["shot_id"] != current_shot["id"]:
+        return ""
+    changes = review["suggestions"].get("profile_changes") or []
+    if not changes:
+        return ""
+    if not current_shot.get("cup_rating"):
+        return "<div class='card muted'><b>Profile recommendation ready.</b> Rate the latest cup above to unlock drafting and pushing this update.</div>"
+    matching = [e for e in edits if e.get("review_id") == review["id"] and e["status"] == "draft"]
+    if matching:
+        return "<h2>Recommended profile update</h2>" + _render_edits(matching)
+    summary = "".join(
+        f"<li>{html.escape(str(c.get('parameter', 'profile')))} → {html.escape(str(c.get('change', '')))}</li>"
+        for c in changes
+    )
+    return f"""<div class='card'><span class='lead'>Profile recommendation ready</span>
+      <p class='muted'>You rated this cup {current_shot['cup_rating']}/5. Review the proposed changes, then draft an approval-only update.</p>
+      <ul class='changes'>{summary}</ul>{_draft_form(review['id'], profiles)}</div>"""
 
 
 _EDIT_PILL = {"draft": "c-accent", "pushed": "c-hi", "discarded": "c-muted", "failed": "c-off"}
@@ -1430,6 +1454,7 @@ async def index(view: str = "now", error: Optional[str] = None, note: Optional[s
             plan = "<div class='card muted'>Rate the baseline cup above before changing a variable. This keeps the outcome interpretable.</div>"
         else:
             plan = _experiment_card(experiment, review) if experiment else _manual_guidance(current_shot, active_bean)
+        profile_update = _profile_recommendation(review, current_shot, edits, profiles)
         content = f"""
           {_aging_banner(active_bean)}
           <h2>Now</h2>
@@ -1437,10 +1462,11 @@ async def index(view: str = "now", error: Optional[str] = None, note: Optional[s
             <span class="muted"> · {html.escape(str(current_shot['id']) if current_shot else 'pull a shot to begin')}</span></div>
           {_workflow_prompt(current_shot, active_bean, experiment)}
           <h2>Next-shot plan</h2>{plan}
+          {profile_update}
           <details class="card"><summary><b>Ask AI for an interpretation</b><span class="muted"> · optional</span></summary>
             <p class="muted">Use AI when the local evidence conflicts or you want a recommendation/profile draft.</p>
             <form method="post" action="/review" class="inline"><button class="btn" type="submit">Ask AI to review new shots</button></form>
-            {_render_review(review, profiles) if review else ''}
+            {_render_review(review, profiles, include_draft=False) if review else ''}
           </details>"""
     elif view == "learn":
         content = f"<h2>Learn</h2>{_learning_lesson(current_shot)}"
@@ -1739,6 +1765,12 @@ async def run_draft(
 ) -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
+        review = await db.get_review(conn, review_id)
+        source = await db.get_shot(conn, review["shot_id"]) if review else None
+        if not review or not source:
+            return RedirectResponse("/?error=" + quote("Review source shot not found."), status_code=303)
+        if not source.get("cup_rating"):
+            return RedirectResponse("/?error=" + quote("Rate the source shot before drafting a profile update."), status_code=303)
         await draft_from_review(
             conn, _cfg, review_id, profile_id=profile_id or None,
             user_notes=(notes or "").strip() or None,
@@ -1776,6 +1808,11 @@ async def approve_edit(edit_id: int, ack: Optional[str] = Form(None)) -> Redirec
     conn = await db.connect(_cfg.db_path)
     try:
         edit = await db.get_pending_edit(conn, edit_id)
+        if edit and edit.get("review_id"):
+            review = await db.get_review(conn, edit["review_id"])
+            source = await db.get_shot(conn, review["shot_id"]) if review else None
+            if not source or not source.get("cup_rating"):
+                return RedirectResponse("/?error=" + quote("Rate the source shot before approving this profile update."), status_code=303)
         # A draft that changes stop conditions needs explicit acknowledgement —
         # enforced here too, not just by the checkbox in the form.
         if edit and edit.get("stop_changes") and ack != "1":

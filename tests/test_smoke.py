@@ -88,6 +88,16 @@ def test_render_review_omits_score_reason_when_missing():
     assert "score-reason" not in html_out
 
 
+def test_profile_recommendation_requires_cup_rating_then_surfaces_draft():
+    from crema.web.app import _profile_recommendation
+    review = _review_dict(profile_changes=[{"parameter": "temperature", "change": "93°C"}])
+    unrated = {"id": "000095", "cup_rating": None}
+    assert "Rate the latest cup" in _profile_recommendation(review, unrated, [], [])
+    rated = {"id": "000095", "cup_rating": 4}
+    card = _profile_recommendation(review, rated, [], [])
+    assert "Profile recommendation ready" in card and "Draft a profile edit" in card
+
+
 def test_fmt_shot_time_formats_and_falls_back():
     ts = int(datetime.datetime(2026, 7, 4, 14, 32).timestamp())
     # Device capture time is used and rendered as local date + time.
