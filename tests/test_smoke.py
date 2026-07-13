@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 
 from crema import db as crema_db
 from crema.draft import _clamp, _to_device_phase, diff_stop_conditions
@@ -361,8 +362,8 @@ def test_shot_coffee_stamped_on_insert_and_preserved_on_reingest(tmp_path):
     asyncio.run(_run())
 
 
-def test_export_bundle_shape_and_stable_install_id(tmp_path):
-    """Bundle carries shots chronologically + reviews, and the install id persists."""
+def test_export_bundle_is_canonical_and_keeps_free_text_local(tmp_path):
+    """Shared data is chronological and uniform, without personal free text."""
     from crema.config import CremaConfig
     from crema.export import build_export_bundle
 
@@ -375,17 +376,19 @@ def test_export_bundle_shape_and_stable_install_id(tmp_path):
             await crema_db.set_shot_tasting_notes(conn, "000001", "sour")
             await crema_db.insert_review(conn, "000001", "m", {"diagnosis": "fast"})
             bundle = await build_export_bundle(conn, cfg)
-            assert bundle["schema_version"] == 1
-            # Chronological: oldest first, so advice->next-shot pairs read in order.
-            assert [s["id"] for s in bundle["shots"]] == ["000001", "000002"]
-            assert bundle["shots"][0]["coffee"] == "light roast"
-            assert bundle["shots"][0]["tasting_notes"] == "sour"
-            assert bundle["reviews"][0]["shot_id"] == "000001"
-            assert bundle["reviews"][0]["suggestions"] == {"diagnosis": "fast"}
-            # Same install id on a second export.
+            assert bundle["schema_version"] == 2
+            assert [s["shot_index"] for s in bundle["shots"]] == [1, 2]
+            assert bundle["shots"][0]["outcome"] == {"cup_rating": None, "taste_tags": ["sour"]}
+            assert bundle["reviews"][0]["shot_index"] == 1
+            assert bundle["reviews"][0]["assistant_used"] is True
+            # Names, raw notes, device shot ids, timestamps, and AI prose never leave the box.
+            shared = json.dumps(bundle)
+            assert "light roast" not in shared and '"sour"' in shared
+            assert "000001" not in shared and "fast" not in shared
+            # Same random participant id on a second export.
             again = await build_export_bundle(conn, cfg)
-            assert again["install_id"] == bundle["install_id"]
-            assert len(bundle["install_id"]) == 36  # uuid4
+            assert again["participant_id"] == bundle["participant_id"]
+            assert len(bundle["participant_id"]) == 36  # uuid4
         finally:
             await conn.close()
 
@@ -659,6 +662,71 @@ def test_recipe_and_experiment_capture_matching_followup_shots(tmp_path):
     asyncio.run(_run())
 
 
+def test_export_includes_structured_experiments_without_private_notes(tmp_path):
+    from crema.config import CremaConfig
+    from crema.export import build_export_bundle
+
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            bean_id = await crema_db.insert_bean(conn, "Private roaster name", "medium")
+            await crema_db.upsert_shot(conn, "000001", {}, bean_id=bean_id)
+            experiment_id = await crema_db.start_experiment(
+                conn, None, bean_id, "My private grinder reference", 7, 3,
+                variable="grind", direction="finer", magnitude=2, unit="grinder_steps",
+            )
+            await crema_db.upsert_shot(conn, "000002", {}, bean_id=bean_id)
+            await crema_db.assign_shot_to_active_experiment(conn, "000002", bean_id)
+            bundle = await build_export_bundle(conn, CremaConfig(db_path=tmp_path / "crema.db"))
+            assert bundle["experiments"] == [{
+                "experiment_index": 1, "variable": "grind", "direction": "finer",
+                "magnitude": 2.0, "unit": "grinder_steps", "baseline_execution_score": 7,
+                "baseline_cup_rating": 3, "followup_shot_indices": [2], "status": "active",
+            }]
+            assert "Private roaster name" not in json.dumps(bundle)
+            assert "private grinder" not in json.dumps(bundle).lower()
+            assert experiment_id == 1
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_dataset_importer_validates_references_and_writes_rows(tmp_path):
+    from crema.dataset import import_bundle, validate_bundle
+
+    bundle = {
+        "schema_version": 2, "participant_id": "a" * 36, "machine": "gaggimate",
+        "shots": [{"shot_index": 1, "relative_day": 0, "bean": {"bean_code": "bean_1", "roast_level": "medium", "process": "washed", "roast_age_days": 12}, "outcome": {"cup_rating": 4, "taste_tags": ["sweet"]}, "telemetry": {}}],
+        "reviews": [{"shot_index": 1, "assistant_used": True, "confidence": "high", "execution_score": 8}],
+        "experiments": [{"experiment_index": 1, "variable": "grind", "direction": "finer", "magnitude": 2, "unit": "grinder_steps", "baseline_execution_score": 7, "baseline_cup_rating": 3, "followup_shot_indices": [1], "status": "closed"}],
+    }
+
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "pool.db")
+        try:
+            await import_bundle(conn, bundle)
+            async with conn.execute("SELECT count(*) AS n FROM community_shots") as cur:
+                assert (await cur.fetchone())["n"] == 1
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+    bad = dict(bundle, reviews=[dict(bundle["reviews"][0], shot_index=99)])
+    try:
+        validate_bundle(bad)
+        raise AssertionError("invalid shot reference should fail")
+    except ValueError:
+        pass
+
+
+def test_workflow_prompt_requires_context_then_cup_rating():
+    from crema.web.app import _workflow_prompt
+    assert "Set up this bean" in _workflow_prompt(None, None, None)
+    shot = {"id": "1", "coffee": "bean", "tasting_notes": "", "cup_rating": None}
+    assert "Save cup rating" in _workflow_prompt(shot, {"name": "bean"}, None)
+
+
 def test_manual_experiment_outcomes_do_not_require_an_ai_review(tmp_path):
     async def _run() -> None:
         conn = await crema_db.connect(tmp_path / "crema.db")
@@ -690,6 +758,31 @@ def test_manual_guidance_is_local_and_offers_an_experiment():
     assert "Read the shot yourself" in html_out
     assert "Start my experiment" in html_out
     assert "Claude" not in html_out
+
+
+def test_learning_lesson_teaches_channeling_as_a_clue_not_a_verdict():
+    from crema.web.app import _learning_lesson
+    html_out = _learning_lesson({
+        "cup_rating": None,
+        "transformed": {"diagnostics": {"channeling": {"channeling_risk": "HIGH"}}},
+    })
+    assert "GaggiMate companion" in html_out
+    assert "clue, not proof" in html_out
+    assert "last third" in html_out
+
+
+def test_learning_lesson_explains_intentional_profile_shape():
+    from crema.web.app import _learning_lesson
+    html_out = _learning_lesson({
+        "cup_rating": 4,
+        "transformed": {"diagnostics": {
+            "channeling": {"channeling_risk": "LOW"},
+            "temperature": {"undershoot_c": 0.2},
+            "profile_compliance": {"flow_rmse_ml_s": 0.1, "pressure_rmse_bar": 0.1},
+        }},
+    })
+    assert "may be intentional" in html_out
+    assert "rated this cup 4/5" in html_out
 
 
 def test_review_persists_token_usage(tmp_path):

@@ -228,6 +228,9 @@ form.inline{display:inline;margin:0}
 nav.toc{display:flex;gap:1rem;margin:.2rem 0 0;font-size:.85rem}
 nav.toc a{color:var(--muted);text-decoration:none;font-weight:600}
 nav.toc a:hover{color:var(--accent)}
+.appnav{display:flex;gap:.35rem;flex-wrap:wrap;margin:.3rem 0 1.2rem;border-bottom:1px solid var(--border);padding-bottom:.65rem}
+.appnav a{padding:.3rem .65rem;border-radius:999px;text-decoration:none;color:var(--muted);font-size:.84rem;font-weight:700}
+.appnav a.active{background:var(--text);color:var(--surface)}
 .score{display:inline-flex;align-items:baseline;gap:.15rem;font-weight:800;
   font-size:1.5rem;line-height:1;padding:.42rem .6rem;border-radius:12px;
   border:1px solid color-mix(in srgb,currentColor 35%,transparent);
@@ -235,6 +238,13 @@ nav.toc a:hover{color:var(--accent)}
 .score small{font-size:.72rem;font-weight:700;opacity:.75}
 .score-reason{font-size:.85rem;margin-top:.25rem}
 .review-top{display:flex;gap:.9rem;align-items:flex-start}
+.lesson-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.55rem;margin-top:.65rem}
+.lesson-step{border-left:2px solid var(--accent);padding:.1rem 0 .1rem .65rem;min-width:0}
+.lesson-step b{display:block;font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.lesson-step span{display:block;font-size:.88rem;margin-top:.12rem}
+.workflow{border-left:4px solid var(--accent)}
+.workflow .step{display:flex;gap:.55rem;align-items:flex-start;margin:.35rem 0}
+.workflow .n{flex:0 0 auto;width:1.35rem;height:1.35rem;border-radius:50%;background:var(--surface-2);color:var(--accent);font-size:.75rem;font-weight:800;display:grid;place-items:center}
 textarea{font:inherit;color:var(--text);background:var(--surface-2);width:100%;
   border:1px solid var(--border);border-radius:8px;padding:.45rem .6rem;resize:vertical}
 textarea::placeholder,input::placeholder{color:var(--muted);opacity:.9}
@@ -265,6 +275,7 @@ details.sub>summary:hover{color:var(--accent)}
   .kv{grid-template-columns:1fr;gap:.05rem}
   .kv .k{margin-top:.45rem}
   .shot{flex-direction:column;align-items:flex-start}
+  .lesson-grid{grid-template-columns:1fr;gap:.7rem}
   .btn{padding:.55rem 1rem}
   pre{font-size:.82rem}
 }
@@ -866,6 +877,17 @@ def _recipe_card(bean: Optional[dict[str, Any]], profiles: list[dict[str, str]])
     </div>"""
 
 
+def _experiment_fields() -> str:
+    """Controlled variables make experiments and community data comparable."""
+    options = lambda values, prompt: f"<option value='' selected disabled>{prompt}</option>" + "".join(f"<option value='{v}'>{v.replace('_', ' ')}</option>" for v in values)
+    return f"""
+      <label class="muted" style="font-size:.82rem">Variable <select name="variable" required>{options(db.EXPERIMENT_VARIABLES, 'choose')}</select></label>
+      <label class="muted" style="font-size:.82rem">Direction <select name="direction" required>{options(db.EXPERIMENT_DIRECTIONS, 'choose')}</select></label>
+      <label class="muted" style="font-size:.82rem">Amount <input name="magnitude" type="number" step=".1" style="width:4.5rem"></label>
+      <label class="muted" style="font-size:.82rem">Unit <select name="unit"><option value="none" selected>none</option>{''.join(f"<option value='{u}'>{u.replace('_', ' ')}</option>" for u in db.EXPERIMENT_UNITS if u != 'none')}</select></label>
+      <input name="change_note" placeholder="optional private note" style="flex:1;min-width:10rem;font:inherit;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">"""
+
+
 def _experiment_card(experiment: Optional[dict[str, Any]], review: Optional[dict[str, Any]]) -> str:
     if experiment:
         shots = experiment["shots"]
@@ -891,7 +913,7 @@ def _experiment_card(experiment: Optional[dict[str, Any]], review: Optional[dict
       <p class="muted" style="margin:0 0 .5rem">Make one deliberate change. New shots for this bean will be captured automatically until you finish the experiment.</p>
       <form method="post" action="/experiments/start" class="row">
         <input type="hidden" name="review_id" value="{review['id']}">
-        <input name="change_note" required placeholder="e.g. ground 2 clicks finer" style="flex:1;min-width:14rem;font:inherit;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
+        {_experiment_fields()}
         <button class="btn btn-sm" type="submit">Start experiment</button>
       </form>
     </div>"""
@@ -925,10 +947,95 @@ def _manual_guidance(shot: Optional[dict[str, Any]], recipe: Optional[dict[str, 
       <p class="muted" style="font-size:.8rem;margin:.35rem 0">Evidence: {html.escape(components)}</p>
       <form method="post" action="/experiments/manual/start" class="row" style="margin-top:.55rem">
         <input type="hidden" name="shot_id" value="{html.escape(shot['id'])}">
-        <input name="change_note" required placeholder="What one change will you make? e.g. 2 clicks finer" style="flex:1;min-width:14rem;font:inherit;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
+        {_experiment_fields()}
         <button class="btn btn-sm" type="submit">Start my experiment</button>
       </form>
     </div>"""
+
+
+def _learning_lesson(shot: Optional[dict[str, Any]]) -> str:
+    """Teach one observable GaggiMate pattern; never recreate its dashboard."""
+    if not shot:
+        return "<div class='card muted'>After your next shot, crema will point to one useful feature in the GaggiMate graph.</div>"
+    diagnostics = shot["transformed"].get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return "<div class='card muted'>This shot has too little telemetry for a lesson. In GaggiMate, check that the full extraction was recorded before drawing conclusions.</div>"
+    channel = diagnostics.get("channeling") if isinstance(diagnostics.get("channeling"), dict) else {}
+    risk = channel.get("channeling_risk") or diagnostics.get("channeling_risk")
+    temp = diagnostics.get("temperature") if isinstance(diagnostics.get("temperature"), dict) else {}
+    compliance = diagnostics.get("profile_compliance") if isinstance(diagnostics.get("profile_compliance"), dict) else diagnostics
+    flow_rmse = compliance.get("flow_rmse_ml_s")
+    pressure_rmse = compliance.get("pressure_rmse_bar")
+    undershoot = temp.get("undershoot_c")
+    try:
+        flow_off = float(flow_rmse) > 0.35
+    except (TypeError, ValueError):
+        flow_off = False
+    try:
+        pressure_off = float(pressure_rmse) > 0.5
+    except (TypeError, ValueError):
+        pressure_off = False
+    try:
+        temp_low = float(undershoot) > 1.0
+    except (TypeError, ValueError):
+        temp_low = False
+
+    if risk in {"HIGH", "VERY_HIGH"}:
+        observe = "The telemetry found unstable flow or a pressure collapse during extraction."
+        meaning = "That can indicate water found an easier path through the puck; it is a clue, not proof."
+        focus = "In GaggiMate, inspect the last third of the pressure and flow traces for a sudden split: pressure down while flow rises or jitters."
+        success = "After changing puck prep, look for a calmer late-shot flow line—not simply higher pressure."
+    elif flow_off:
+        observe = "Actual flow stayed materially away from the profile's flow target."
+        meaning = "Flow is a direct read on how the puck resisted water; compare it with the target line before blaming the profile."
+        focus = "In GaggiMate, turn on the flow target and actual-flow traces. Look at where they separate, not only the final value."
+        success = "With a better-matched grind or dose, actual flow should spend more of the shot near its target."
+    elif temp_low:
+        observe = "Brew temperature ran noticeably below its programmed target."
+        meaning = "This is a machine-execution observation, separate from puck resistance or taste."
+        focus = "In GaggiMate, compare the temperature trace with its target through the brew phase."
+        success = "Before changing recipe variables, look for the temperature trace to settle closer to target."
+    elif pressure_off:
+        observe = "Pressure did not closely follow the programmed target."
+        meaning = "A shaped pressure line can be intentional; the useful question is whether actual pressure follows that intended shape."
+        focus = "In GaggiMate, compare actual and target pressure across the phase changes, rather than judging a decline by itself."
+        success = "A clean repeat follows the same programmed shape with a smaller gap between actual and target."
+    else:
+        observe = "Flow, pressure, and temperature were broadly consistent with the programmed shot."
+        meaning = "A slope in the graph may be intentional when it follows the profile, so judge it against the target line."
+        focus = "In GaggiMate, compare actual traces with the target traces and then use taste to decide whether the recipe itself needs changing."
+        success = "If the cup improves too, repeat this shape before making a more ambitious adjustment."
+
+    taste = shot.get("cup_rating")
+    taste_line = f"You rated this cup {taste}/5—use that as the final check on whether a cleaner trace was actually better." if taste else "Taste check: rate the cup after you inspect the graph; clean telemetry and a good cup are related, not identical."
+    raw = f"channeling: {risk or '—'} · flow RMSE: {flow_rmse if flow_rmse is not None else '—'} · pressure RMSE: {pressure_rmse if pressure_rmse is not None else '—'}"
+    return f"""<div class="card">
+      <div class="row" style="justify-content:space-between"><span class="lead">Learn from this shot</span>{_pill('GaggiMate companion', 'c-mid')}</div>
+      <div class="lesson-grid">
+        <div class="lesson-step"><b>Notice</b><span>{html.escape(observe)}</span></div>
+        <div class="lesson-step"><b>Meaning</b><span>{html.escape(meaning)}</span></div>
+        <div class="lesson-step"><b>Look next</b><span>{html.escape(focus)}</span></div>
+      </div>
+      <p style="margin:.65rem 0 .2rem"><b>Next-shot check:</b> {html.escape(success)}</p>
+      <p class="muted" style="font-size:.82rem;margin:.25rem 0">{html.escape(taste_line)}</p>
+      <details class="sub"><summary>Underlying signals</summary><p class="muted" style="margin:.3rem 0 0">{html.escape(raw)}</p></details>
+    </div>"""
+
+
+def _workflow_prompt(shot: Optional[dict[str, Any]], bean: Optional[dict[str, Any]], experiment: Optional[dict[str, Any]]) -> str:
+    """The evidence sequence that keeps each shared/local record interpretable."""
+    if not bean:
+        return """<div class='card workflow'><b>Start with context</b><div class='step'><span class='n'>1</span><span>Set the bean and its recipe target before the next shot, so results are comparable.</span></div><a class='btn btn-sm' href='/?view=setup'>Set up this bean</a></div>"""
+    if not shot:
+        return """<div class='card workflow'><b>Ready for a baseline</b><div class='step'><span class='n'>1</span><span>Pull one shot with this bean and recipe. crema will attach the telemetry automatically.</span></div></div>"""
+    if not shot.get("cup_rating"):
+        coffee = html.escape(shot.get("coffee") or "")
+        notes = html.escape(shot.get("tasting_notes") or "")
+        options = "".join(f"<option value='{n}'>{n}/5</option>" for n in range(1, 6))
+        return f"""<div class='card workflow'><b>Close the loop: taste this baseline</b><div class='step'><span class='n'>2</span><span>Telemetry describes execution; your cup rating tells us whether it was actually better.</span></div><form method='post' action='/shots/{html.escape(shot['id'])}/tasting-notes' class='row'><input type='hidden' name='coffee' value='{coffee}'><input type='hidden' name='notes' value='{notes}'><select name='cup_rating' required><option value='' selected disabled>rate the cup</option>{options}</select><button class='btn btn-sm'>Save cup rating</button></form></div>"""
+    if experiment:
+        return """<div class='card workflow'><b>Protect the experiment</b><div class='step'><span class='n'>3</span><span>Pull and rate follow-up shots. Keep every other variable steady until you have an outcome.</span></div></div>"""
+    return """<div class='card workflow'><b>Choose one testable change</b><div class='step'><span class='n'>3</span><span>Select a controlled variable, direction, amount, and unit below. That makes the next result useful to you and safe to aggregate anonymously.</span></div></div>"""
 
 
 def _comparison_select(name: str, shots: list[dict[str, Any]], selected: str) -> str:
@@ -1266,7 +1373,7 @@ async def logout() -> RedirectResponse:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
+async def index(view: str = "now", error: Optional[str] = None, note: Optional[str] = None) -> str:
     conn = await db.connect(_cfg.db_path)
     try:
         review = await db.latest_review(conn)
@@ -1281,6 +1388,7 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         reviews_by_shot = await db.latest_reviews_for_shots(conn, [s["id"] for s in shots])
     finally:
         await conn.close()
+    view = view if view in {"now", "learn", "history", "setup"} else "now"
     auto_pill = _pill(f"auto-review {'on' if autoreview else 'off'}", "c-ok" if autoreview else "c-muted", dot=True)
     auto_toggle = (
         f"<form method='post' action='/autoreview' class='inline'>"
@@ -1313,6 +1421,43 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         banner += f"<div class='banner error'>{html.escape(error)}</div>"
     if note:
         banner += f"<div class='banner note'>{html.escape(note)}</div>"
+    profiles = _profiles_in_shots(shots)
+    current_shot = shots[0] if shots else None
+    if view == "now":
+        if not active_bean or not current_shot:
+            plan = "<div class='card muted'>Complete the context and baseline steps above to create a next-shot plan.</div>"
+        elif not current_shot.get("cup_rating") and not experiment:
+            plan = "<div class='card muted'>Rate the baseline cup above before changing a variable. This keeps the outcome interpretable.</div>"
+        else:
+            plan = _experiment_card(experiment, review) if experiment else _manual_guidance(current_shot, active_bean)
+        content = f"""
+          {_aging_banner(active_bean)}
+          <h2>Now</h2>
+          <div class="card"><span class="lead">{html.escape(active_bean['name']) if active_bean else 'No active bean'}</span>
+            <span class="muted"> · {html.escape(str(current_shot['id']) if current_shot else 'pull a shot to begin')}</span></div>
+          {_workflow_prompt(current_shot, active_bean, experiment)}
+          <h2>Next-shot plan</h2>{plan}
+          <details class="card"><summary><b>Ask AI for an interpretation</b><span class="muted"> · optional</span></summary>
+            <p class="muted">Use AI when the local evidence conflicts or you want a recommendation/profile draft.</p>
+            <form method="post" action="/review" class="inline"><button class="btn" type="submit">Ask AI to review new shots</button></form>
+            {_render_review(review, profiles) if review else ''}
+          </details>"""
+    elif view == "learn":
+        content = f"<h2>Learn</h2>{_learning_lesson(current_shot)}"
+    elif view == "history":
+        content = f"""<h2>History</h2><div class="card row"><a class="btn btn-sm" href="/compare">Compare shots</a><a class="btn btn-sm btn-ghost" href="/trends">View trends</a></div>
+          <details class="sec" open><summary><h2>Shot notebook</h2></summary>{_render_shots(shots, reviews_by_shot)}</details>"""
+    else:
+        content = f"""
+          <h2>Setup</h2>
+          <details class="sec" open><summary><h2>Bean &amp; recipe</h2></summary>{_new_bean_card(active_bean, bool(grinder))}{_recipe_card(active_bean, profiles)}</details>
+          <details class="sec"><summary><h2>Profile edits</h2></summary>{_render_edits(edits)}</details>
+          <details class="sec"><summary><h2>Machine, sharing &amp; settings</h2></summary>
+            <div class="card"><div class="row">{auto_pill}{auto_toggle}{share_pill}{share_toggle}</div>
+              <form method="post" action="/grinder" class="row" style="margin-top:.7rem"><label class="muted">Grinder</label><input name="grinder" type="text" value="{html.escape(grinder)}" style="flex:1;min-width:12rem;font:inherit;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem"><button class="btn btn-sm btn-ghost">Save</button></form>
+              <form method="post" action="/coffee" class="row" style="margin-top:.6rem"><label class="muted">Coffee</label><input name="coffee" type="text" value="{html.escape(coffee)}" style="flex:1;min-width:12rem;font:inherit;color:var(--text);background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem"><button class="btn btn-sm btn-ghost">Save</button></form>
+            </div></details>"""
+    tabs = "".join(f"<a href='/?view={key}'{' class=\"active\"' if view == key else ''}>{label}</a>" for key, label in (("now", "Now"), ("learn", "Learn"), ("history", "History"), ("setup", "Setup")))
     body = f"""
       <header>
         <a class="brand" href="/"><img src="/icon.png" alt="" width="32" height="32">
@@ -1320,50 +1465,9 @@ async def index(error: Optional[str] = None, note: Optional[str] = None) -> str:
         <span class="row">{status_pill}<span class="muted" style="font-size:.82rem">{html.escape(host)}</span>
           {"<form method='post' action='/logout' class='inline'><button class='btn btn-sm btn-ghost' type='submit'>Sign out</button></form>" if _cfg.web_password else ""}</span>
       </header>
-      <nav class="toc"><a href="#newbean">New bean</a><a href="#recipe">Recipe</a><a href="#manual">Dial in myself</a><a href="#experiment">Experiment</a><a href="#review">AI assist</a>
-        <a href="#edits">Profile edits</a><a href="#shots">Recent shots</a><a href="/compare">Compare</a><a href="/trends">Trends</a></nav>
+      <nav class="appnav">{tabs}</nav>
       {banner}
-      {_aging_banner(active_bean)}
-      <div class="row" style="margin-top:.9rem;gap:.5rem .8rem">
-        <form method="post" action="/review" class="inline">
-          <button class="btn" type="submit" title="Pull new shots off the machine and ask Claude for a review">Ask AI to review new shots</button></form>
-        {auto_pill}{auto_toggle}
-        <span style="flex-basis:100%;height:0"></span>
-        {share_pill}{share_toggle}
-      </div>
-      <details class="sec" open id="newbean"><summary><h2>Start a new bean</h2></summary>
-        {_new_bean_card(active_bean, bool(grinder))}</details>
-      <details class="sec" open id="recipe"><summary><h2>Recipe targets</h2></summary>
-        {_recipe_card(active_bean, _profiles_in_shots(shots))}</details>
-      <details class="sec" open id="manual"><summary><h2>Dial in myself</h2></summary>
-        {_manual_guidance(shots[0] if shots else None, active_bean)}</details>
-      <details class="sec" open id="experiment"><summary><h2>Dial-in experiment</h2></summary>
-        {_experiment_card(experiment, review)}</details>
-      <details class="sec" open id="review"><summary><h2>AI assist</h2></summary>
-        {_render_review(review, _profiles_in_shots(shots))}</details>
-      <details class="sec" open id="edits"><summary><h2>Profile edits</h2></summary>
-        {_render_edits(edits)}</details>
-      <details class="sec" open id="shots"><summary><h2>Recent shots</h2></summary>
-        {_render_shots(shots, reviews_by_shot)}</details>
-      <details class="sec" id="settings"><summary><h2>Settings — grinder &amp; coffee</h2></summary>
-        <div class="card">
-          <form method="post" action="/grinder" class="row">
-            <label class="muted" style="font-size:.88rem;min-width:4rem" for="grinder">Grinder</label>
-            <input id="grinder" name="grinder" type="text" value="{html.escape(grinder)}"
-              placeholder="e.g. Eureka Mignon Specialità, stepless — helps tailor grind advice"
-              style="flex:1;min-width:12rem;font:inherit;color:var(--text);background:var(--surface-2);
-              border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
-            <button class="btn btn-sm btn-ghost" type="submit">Save</button>
-          </form>
-          <form method="post" action="/coffee" class="row" style="margin-top:.6rem">
-            <label class="muted" style="font-size:.88rem;min-width:4rem" for="coffee">Coffee</label>
-            <input id="coffee" name="coffee" type="text" value="{html.escape(coffee)}"
-              placeholder="Free-text beans — or use ‘Start a new bean’ above to set them from a starting shot"
-              style="flex:1;min-width:12rem;font:inherit;color:var(--text);background:var(--surface-2);
-              border:1px solid var(--border);border-radius:8px;padding:.35rem .6rem">
-            <button class="btn btn-sm btn-ghost" type="submit">Save</button>
-          </form>
-        </div></details>
+      {content}
     """
     # Auto-refresh the report when the timer reviews a new shot in the background.
     sig = _state_sig(review, shots, len(edits))
@@ -1475,11 +1579,29 @@ async def save_recipe(
     return RedirectResponse("/?note=" + quote("Recipe targets saved — future reviews of this bean score against them.") + "#recipe", status_code=303)
 
 
+def _experiment_input(variable: str, direction: str, magnitude: str, unit: str, note: str) -> tuple[str, str, Optional[float], str, str]:
+    """Validate the exportable experiment fields and compose a local display note."""
+    if variable not in db.EXPERIMENT_VARIABLES or direction not in db.EXPERIMENT_DIRECTIONS or unit not in db.EXPERIMENT_UNITS:
+        raise ValueError("Choose a variable, direction, and unit from the listed values.")
+    amount: Optional[float] = None
+    if magnitude.strip():
+        amount = float(magnitude)
+        if amount < 0 or amount > 1000:
+            raise ValueError("Experiment amount must be between 0 and 1000.")
+    display = f"{variable.replace('_', ' ')}: {direction}"
+    if amount is not None and unit != "none":
+        display += f" {amount:g} {unit.replace('_', ' ')}"
+    if note.strip():
+        display += f" — {note.strip()[:240]}"
+    return variable, direction, amount, unit, display
+
+
 @app.post("/experiments/start")
-async def start_experiment(review_id: int = Form(...), change_note: str = Form(...)) -> RedirectResponse:
-    note = change_note.strip()[:240]
-    if not note:
-        return RedirectResponse("/?error=" + quote("Describe the one change you made."), status_code=303)
+async def start_experiment(review_id: int = Form(...), variable: str = Form(...), direction: str = Form(...), magnitude: str = Form(""), unit: str = Form("none"), change_note: str = Form("")) -> RedirectResponse:
+    try:
+        variable, direction, amount, unit, note = _experiment_input(variable, direction, magnitude, unit, change_note)
+    except (ValueError, TypeError) as e:
+        return RedirectResponse("/?error=" + quote(str(e)), status_code=303)
     conn = await db.connect(_cfg.db_path)
     try:
         review = await db.get_review(conn, review_id)
@@ -1489,18 +1611,19 @@ async def start_experiment(review_id: int = Form(...), change_note: str = Form(.
         if not shot:
             return RedirectResponse("/?error=" + quote("Source shot not found."), status_code=303)
         score = review["suggestions"].get("score")
-        await db.start_experiment(conn, review_id, shot.get("bean_id"), note, score if isinstance(score, int) else None, shot.get("cup_rating"))
+        await db.start_experiment(conn, review_id, shot.get("bean_id"), note, score if isinstance(score, int) else None, shot.get("cup_rating"), variable, direction, amount, unit)
     finally:
         await conn.close()
     return RedirectResponse("/?note=" + quote("Experiment started. New matching-bean shots will be tracked automatically.") + "#experiment", status_code=303)
 
 
 @app.post("/experiments/manual/start")
-async def start_manual_experiment(shot_id: str = Form(...), change_note: str = Form(...)) -> RedirectResponse:
+async def start_manual_experiment(shot_id: str = Form(...), variable: str = Form(...), direction: str = Form(...), magnitude: str = Form(""), unit: str = Form("none"), change_note: str = Form("")) -> RedirectResponse:
     """Start a self-guided experiment without calling Claude or needing a review."""
-    note = change_note.strip()[:240]
-    if not note:
-        return RedirectResponse("/?error=" + quote("Describe the one change you will make."), status_code=303)
+    try:
+        variable, direction, amount, unit, note = _experiment_input(variable, direction, magnitude, unit, change_note)
+    except (ValueError, TypeError) as e:
+        return RedirectResponse("/?error=" + quote(str(e)), status_code=303)
     conn = await db.connect(_cfg.db_path)
     try:
         shot = await db.get_shot(conn, shot_id)
@@ -1508,7 +1631,7 @@ async def start_manual_experiment(shot_id: str = Form(...), change_note: str = F
             return RedirectResponse("/?error=" + quote("Source shot not found."), status_code=303)
         recipe = await db.get_bean(conn, shot["bean_id"]) if shot.get("bean_id") else None
         baseline = round(execution_score(shot["transformed"], recipe=recipe)["score"])
-        await db.start_experiment(conn, None, shot.get("bean_id"), note, baseline, shot.get("cup_rating"))
+        await db.start_experiment(conn, None, shot.get("bean_id"), note, baseline, shot.get("cup_rating"), variable, direction, amount, unit)
     finally:
         await conn.close()
     return RedirectResponse("/?note=" + quote("Self-guided experiment started — no AI call was made.") + "#experiment", status_code=303)

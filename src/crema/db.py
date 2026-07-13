@@ -102,6 +102,10 @@ CREATE TABLE IF NOT EXISTS experiments (
     bean_id           INTEGER,
     source_review_id  INTEGER,
     change_note       TEXT NOT NULL,
+    variable          TEXT, -- grind|dose|yield|temperature|pressure|flow|preinfusion|puck_prep|other
+    direction         TEXT, -- finer|coarser|increase|decrease|prepare|other
+    magnitude         REAL,
+    unit              TEXT, -- grinder_steps|g|c|bar|ml_s|seconds|none
     baseline_score    INTEGER,
     baseline_cup      INTEGER,
     status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
@@ -124,6 +128,12 @@ CREATE INDEX IF NOT EXISTS idx_experiment_shots_shot ON experiment_shots(shot_id
 ROAST_LEVELS = ["light", "medium-light", "medium", "medium-dark", "dark"]
 # Optional processing methods, likewise restricted.
 PROCESSES = ["washed", "natural", "honey", "anaerobic", "other"]
+
+# Canonical dataset vocabulary. Free-text change notes stay local, but these
+# values are safe to aggregate across baristas and export anonymously.
+EXPERIMENT_VARIABLES = ["grind", "dose", "yield", "temperature", "pressure", "flow", "preinfusion", "puck_prep", "other"]
+EXPERIMENT_DIRECTIONS = ["finer", "coarser", "increase", "decrease", "prepare", "other"]
+EXPERIMENT_UNITS = ["grinder_steps", "g", "c", "bar", "ml_s", "seconds", "none"]
 
 
 async def connect(db_path: Path) -> aiosqlite.Connection:
@@ -180,6 +190,13 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         # Claude token usage per review, persisted for after-the-fact cost audit.
         await db.execute("ALTER TABLE reviews ADD COLUMN input_tokens INTEGER")
         await db.execute("ALTER TABLE reviews ADD COLUMN output_tokens INTEGER")
+    async with db.execute("PRAGMA table_info(experiments)") as cur:
+        experiment_cols = {row["name"] async for row in cur}
+    for column, definition in (
+        ("variable", "TEXT"), ("direction", "TEXT"), ("magnitude", "REAL"), ("unit", "TEXT"),
+    ):
+        if column not in experiment_cols:
+            await db.execute(f"ALTER TABLE experiments ADD COLUMN {column} {definition}")
 
 
 async def upsert_profile(
@@ -588,13 +605,14 @@ async def set_bean_recipe(
 
 async def start_experiment(
     db: aiosqlite.Connection, source_review_id: int, bean_id: Optional[int], change_note: str,
-    baseline_score: Optional[int], baseline_cup: Optional[int],
+    baseline_score: Optional[int], baseline_cup: Optional[int], variable: Optional[str] = None,
+    direction: Optional[str] = None, magnitude: Optional[float] = None, unit: Optional[str] = None,
 ) -> int:
     """Start a single active dial-in experiment; close any prior active one."""
     await db.execute("UPDATE experiments SET status='closed', closed_at=unixepoch('now') WHERE status='active'")
     cur = await db.execute(
-        "INSERT INTO experiments (bean_id, source_review_id, change_note, baseline_score, baseline_cup) VALUES (?, ?, ?, ?, ?)",
-        (bean_id, source_review_id, change_note, baseline_score, baseline_cup),
+        "INSERT INTO experiments (bean_id, source_review_id, change_note, baseline_score, baseline_cup, variable, direction, magnitude, unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (bean_id, source_review_id, change_note, baseline_score, baseline_cup, variable, direction, magnitude, unit),
     )
     await db.commit()
     return int(cur.lastrowid)

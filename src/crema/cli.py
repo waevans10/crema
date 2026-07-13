@@ -233,7 +233,7 @@ def export(
         typer.echo(
             f"Wrote {len(bundle['shots'])} shots and {len(bundle['reviews'])} reviews to {path}."
         )
-        typer.echo(f"Install id: {bundle['install_id']} (quote this to request deletion from the pool).")
+        typer.echo(f"Participant id: {bundle['participant_id']} (quote this to request deletion from the pool).")
         typer.echo("Read it over — this is exactly what `crema share` would send.")
 
     asyncio.run(_run())
