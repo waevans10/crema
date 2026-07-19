@@ -109,8 +109,11 @@ CREATE TABLE IF NOT EXISTS experiments (
     baseline_score    INTEGER,
     baseline_cup      INTEGER,
     status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','closed')),
+    outcome           TEXT CHECK (outcome IN ('improved','unchanged','worse','inconclusive')),
+    decision          TEXT CHECK (decision IN ('keep','revert','continue')),
     created_at        REAL NOT NULL DEFAULT (unixepoch('now')),
     closed_at         REAL,
+    concluded_at      REAL,
     FOREIGN KEY (bean_id) REFERENCES beans(id),
     FOREIGN KEY (source_review_id) REFERENCES reviews(id)
 );
@@ -194,6 +197,7 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         experiment_cols = {row["name"] async for row in cur}
     for column, definition in (
         ("variable", "TEXT"), ("direction", "TEXT"), ("magnitude", "REAL"), ("unit", "TEXT"),
+        ("outcome", "TEXT"), ("decision", "TEXT"), ("concluded_at", "REAL"),
     ):
         if column not in experiment_cols:
             await db.execute(f"ALTER TABLE experiments ADD COLUMN {column} {definition}")
@@ -632,6 +636,39 @@ async def assign_shot_to_active_experiment(
 
 async def close_experiment(db: aiosqlite.Connection, experiment_id: int) -> bool:
     cur = await db.execute("UPDATE experiments SET status='closed', closed_at=unixepoch('now') WHERE id=?", (experiment_id,))
+    await db.commit()
+    return bool(cur.rowcount)
+
+
+async def conclude_experiment(
+    db: aiosqlite.Connection, experiment_id: int, outcome: str, decision: str,
+) -> bool:
+    """Record the barista's outcome and the next decision for a dial-in run."""
+    if outcome not in {"improved", "unchanged", "worse", "inconclusive"}:
+        raise ValueError("Choose a valid experiment outcome.")
+    if decision not in {"keep", "revert", "continue"}:
+        raise ValueError("Choose keep, revert, or continue.")
+    if decision == "keep" and outcome not in {"improved", "unchanged"}:
+        raise ValueError("Keep is only available for an improved or unchanged result.")
+    if decision == "revert" and outcome not in {"worse", "unchanged"}:
+        raise ValueError("Revert is only available for a worse or unchanged result.")
+    if decision in {"keep", "revert"}:
+        async with db.execute(
+            "SELECT e.baseline_cup, COUNT(s.id) AS rated_followups FROM experiments e "
+            "LEFT JOIN experiment_shots es ON es.experiment_id=e.id "
+            "LEFT JOIN shots s ON s.id=es.shot_id AND s.cup_rating IS NOT NULL WHERE e.id=?",
+            (experiment_id,),
+        ) as cur:
+            evidence = await cur.fetchone()
+        if not evidence or evidence["baseline_cup"] is None or not evidence["rated_followups"]:
+            raise ValueError("Rate the baseline and at least one follow-up cup before keeping or reverting.")
+    close = decision in {"keep", "revert"}
+    cur = await db.execute(
+        "UPDATE experiments SET outcome=?, decision=?, concluded_at=unixepoch('now'), "
+        "status=CASE WHEN ? THEN 'closed' ELSE status END, "
+        "closed_at=CASE WHEN ? THEN unixepoch('now') ELSE closed_at END WHERE id=? AND status='active'",
+        (outcome, decision, close, close, experiment_id),
+    )
     await db.commit()
     return bool(cur.rowcount)
 

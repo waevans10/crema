@@ -169,6 +169,15 @@ h2{font-size:.82rem;text-transform:uppercase;letter-spacing:.08em;color:var(--mu
 .kv{display:grid;grid-template-columns:auto 1fr;gap:.2rem .8rem;margin:.5rem 0}
 .kv .k{color:var(--muted);font-weight:600}
 .lead{font-size:1.05rem;font-weight:600;margin:.1rem 0 .5rem}
+.eyebrow{display:block;color:var(--muted);font-size:.7rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
+.experiment-run{border-left:4px solid var(--accent)}
+.experiment-grid{display:grid;grid-template-columns:1fr 1fr;gap:.7rem;margin-top:.8rem}
+.experiment-grid>div{background:var(--surface-2);padding:.65rem .75rem;border-radius:9px}
+.experiment-grid b,.experiment-grid span:not(.eyebrow){display:block}
+.experiment-shots{margin:.55rem 0;padding-left:1.3rem;font-variant-numeric:tabular-nums}
+.experiment-shots li{padding:.25rem 0}.experiment-shots li span{color:var(--muted);margin-left:.35rem}
+.experiment-decision{display:flex;align-items:end;gap:.55rem;flex-wrap:wrap;margin-top:.75rem;padding-top:.7rem;border-top:1px solid var(--border)}
+.experiment-decision label{display:grid;gap:.2rem}
 .pill{display:inline-flex;align-items:center;gap:.35rem;padding:.16rem .6rem;
   border-radius:999px;font-size:.76rem;font-weight:700;line-height:1;
   border:1px solid color-mix(in srgb,currentColor 35%,transparent);
@@ -276,6 +285,7 @@ details.sub>summary:hover{color:var(--accent)}
   .kv .k{margin-top:.45rem}
   .shot{flex-direction:column;align-items:flex-start}
   .lesson-grid{grid-template-columns:1fr;gap:.7rem}
+  .experiment-grid{grid-template-columns:1fr}
   .btn{padding:.55rem 1rem}
   pre{font-size:.82rem}
 }
@@ -919,17 +929,37 @@ def _experiment_card(experiment: Optional[dict[str, Any]], review: Optional[dict
         cups = [s["cup_rating"] for s in shots if isinstance(s.get("cup_rating"), int)]
         score_delta = (sum(scores) / len(scores) - experiment["baseline_score"]) if scores and experiment.get("baseline_score") else None
         cup_delta = (sum(cups) / len(cups) - experiment["baseline_cup"]) if cups and experiment.get("baseline_cup") else None
-        outcome = []
-        if score_delta is not None:
-            outcome.append(f"execution {score_delta:+.1f}")
+        if cup_delta is None:
+            suggested_outcome, verdict = "inconclusive", "Rate at least one follow-up cup before deciding whether this change helped."
+        elif cup_delta > .25:
+            suggested_outcome, verdict = "improved", "The cup result improved against the baseline."
+        elif cup_delta < -.25:
+            suggested_outcome, verdict = "worse", "The cup result fell below the baseline."
+        else:
+            suggested_outcome, verdict = "unchanged", "The cup result is effectively unchanged from the baseline."
+        evidence = []
         if cup_delta is not None:
-            outcome.append(f"cup {cup_delta:+.1f}/5")
-        outcome_text = " · ".join(outcome) if outcome else "Pull and rate follow-up shots to measure the result."
-        ids = ", ".join(s["id"] for s in shots) or "none yet"
-        return f"""<div class="card">
-          <div class="row" style="justify-content:space-between"><span>{_pill('experiment active', 'c-accent', dot=True)} <b>{html.escape(experiment['change_note'])}</b></span>
-          <form method="post" action="/experiments/{experiment['id']}/close" class="inline"><button class="btn btn-sm btn-ghost">Finish experiment</button></form></div>
-          <p class="muted" style="margin:.45rem 0 0">Follow-up shots: {html.escape(ids)}. Outcome vs baseline: <b>{html.escape(outcome_text)}</b></p>
+            evidence.append(f"Cup {cup_delta:+.1f}/5")
+        if score_delta is not None:
+            evidence.append(f"execution {score_delta:+.1f}/10")
+        evidence_text = " · ".join(evidence) if evidence else "No rated follow-up yet"
+        followups = "".join(
+            f"<li><b>Shot {html.escape(s['id'])}</b><span>Cup {html.escape(str(s.get('cup_rating') or '—'))}/5 · execution {html.escape(str(s.get('score') or '—'))}/10</span></li>"
+            for s in shots
+        ) or "<li><span>Waiting for the first matching-bean follow-up.</span></li>"
+        choices = "".join(f"<option value='{o}'>{o}</option>" for o in ("improved", "unchanged", "worse", "inconclusive") if o != suggested_outcome)
+        return f"""<div class="card experiment-run" id="experiment">
+          <div class="row"><span>{_pill('active dial-in run', 'c-accent', dot=True)} <b>{html.escape(experiment['change_note'])}</b></span></div>
+          <div class="experiment-grid"><div><span class="eyebrow">Baseline</span><b>Cup {html.escape(str(experiment.get('baseline_cup') or '—'))}/5</b><span>Execution {html.escape(str(experiment.get('baseline_score') or '—'))}/10</span></div>
+          <div><span class="eyebrow">Follow-ups</span><b>{len(shots)} shot{'s' if len(shots) != 1 else ''}</b><span>{html.escape(evidence_text)}</span></div></div>
+          <p style="margin:.75rem 0 .35rem"><b>Current read:</b> {html.escape(verdict)}</p>
+          <ol class="experiment-shots">{followups}</ol>
+          <form method="post" action="/experiments/{experiment['id']}/conclude" class="experiment-decision">
+            <label><span class="eyebrow">Outcome</span><select name="outcome"><option value="{suggested_outcome}">{suggested_outcome}</option>{choices}</select></label>
+            <label><span class="eyebrow">Next decision</span><select name="decision"><option value="continue">Continue testing</option><option value="keep">Keep this change</option><option value="revert">Revert this change</option></select></label>
+            <button class="btn btn-sm">Record decision</button>
+          </form>
+          <p class="muted" style="font-size:.8rem;margin:.5rem 0 0">Cup outcome leads the decision; execution is supporting evidence. Keep or revert closes this run.</p>
         </div>"""
     if not review:
         return "<div class='card muted'>Review a shot first, then record one deliberate change as an experiment.</div>"
@@ -1671,6 +1701,23 @@ async def finish_experiment(experiment_id: int) -> RedirectResponse:
     finally:
         await conn.close()
     return RedirectResponse("/?note=" + quote("Experiment finished. Start another when you make the next deliberate change.") + "#experiment", status_code=303)
+
+
+@app.post("/experiments/{experiment_id}/conclude")
+async def conclude_experiment(experiment_id: int, outcome: str = Form(...), decision: str = Form(...)) -> RedirectResponse:
+    """Persist the barista's decision; only a keep/revert closes the active run."""
+    conn = await db.connect(_cfg.db_path)
+    try:
+        try:
+            changed = await db.conclude_experiment(conn, experiment_id, outcome, decision)
+        except ValueError as e:
+            return RedirectResponse("/?error=" + quote(str(e)) + "#experiment", status_code=303)
+        if not changed:
+            return RedirectResponse("/?error=" + quote("Experiment not found.") + "#experiment", status_code=303)
+    finally:
+        await conn.close()
+    action = "Run closed" if decision in {"keep", "revert"} else "Decision recorded; continue with another controlled follow-up"
+    return RedirectResponse("/?note=" + quote(action + ".") + "#experiment", status_code=303)
 
 
 @app.post("/beans/start")

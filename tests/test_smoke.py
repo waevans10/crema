@@ -760,6 +760,44 @@ def test_manual_experiment_outcomes_do_not_require_an_ai_review(tmp_path):
     asyncio.run(_run())
 
 
+def test_experiment_conclusion_requires_cup_evidence_and_closes_on_keep(tmp_path):
+    async def _run() -> None:
+        conn = await crema_db.connect(tmp_path / "crema.db")
+        try:
+            bean_id = await crema_db.insert_bean(conn, "Test bean", "medium")
+            await crema_db.upsert_shot(conn, "000001", {}, bean_id=bean_id)
+            await crema_db.set_shot_cup_rating(conn, "000001", 3)
+            experiment_id = await crema_db.start_experiment(conn, None, bean_id, "one click finer", 7, 3)
+            try:
+                await crema_db.conclude_experiment(conn, experiment_id, "improved", "keep")
+                raise AssertionError("A decision without a follow-up cup should fail")
+            except ValueError:
+                pass
+            await crema_db.upsert_shot(conn, "000002", {}, bean_id=bean_id)
+            await crema_db.assign_shot_to_active_experiment(conn, "000002", bean_id)
+            await crema_db.set_shot_cup_rating(conn, "000002", 4)
+            assert await crema_db.conclude_experiment(conn, experiment_id, "improved", "keep")
+            async with conn.execute("SELECT status, outcome, decision FROM experiments WHERE id=?", (experiment_id,)) as cur:
+                row = await cur.fetchone()
+            assert dict(row) == {"status": "closed", "outcome": "improved", "decision": "keep"}
+        finally:
+            await conn.close()
+
+    asyncio.run(_run())
+
+
+def test_active_experiment_card_centers_cup_outcome_and_decision():
+    from crema.web.app import _experiment_card
+    html_out = _experiment_card({
+        "id": 1, "change_note": "grind: finer 2 grinder steps", "baseline_cup": 3,
+        "baseline_score": 7, "shots": [{"id": "000002", "cup_rating": 4, "score": 8}],
+    }, None)
+    assert "Current read" in html_out
+    assert "Cup +1.0/5" in html_out
+    assert "Keep this change" in html_out
+    assert "Record decision" in html_out
+
+
 def test_manual_guidance_is_local_and_offers_an_experiment():
     from crema.web.app import _manual_guidance
     html_out = _manual_guidance(
