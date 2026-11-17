@@ -173,5 +173,6 @@ async def ingest_new_shots_gaggiuino(
                 coffee=coffee,
                 bean_id=bean_id,
             )
+            await db.assign_shot_to_active_experiment(conn, transformed["shot_id"], bean_id)
             new_ids.append(transformed["shot_id"])
     return new_ids

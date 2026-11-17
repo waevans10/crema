@@ -82,7 +82,7 @@ def review(
     """Ingest new shots, then run a Claude review of the recent window.
 
     To keep costs down, this skips the (paid) Claude call when no new shots were
-    ingested and a review already exists — so the scheduled timer only spends
+    available without a successful review — so the scheduled timer only spends
     money when you've actually pulled a shot. Use --force to review anyway.
     """
 
@@ -96,7 +96,7 @@ def review(
                 if not await db.get_bool_setting(conn, "autoreview", cfg.autoreview):
                     typer.echo("Auto-review is off — skipping (turn it on in the UI, or use --force).")
                     return
-                if not new_ids and await db.latest_review(conn) is not None:
+                if not await db.newest_shot_needs_review(conn):
                     typer.echo("No new shots since the last review — skipping (use --force to override).")
                     return
             result = await review_recent(conn, cfg)
@@ -494,7 +494,7 @@ def draft(
 
 
 @app.command()
-def edits(status: Optional[str] = typer.Option(None, help="Filter: draft|pushed|discarded|failed")) -> None:
+def edits(status: Optional[str] = typer.Option(None, help="Filter: draft|pushing|pushed|discarded|failed|unknown")) -> None:
     """List profile edits."""
 
     async def _run() -> None:
@@ -510,14 +510,17 @@ def edits(status: Optional[str] = typer.Option(None, help="Filter: draft|pushed|
 
 
 @app.command()
-def push(edit_id: int = typer.Argument(..., help="Edit id to approve and push.")) -> None:
+def push(
+    edit_id: int = typer.Argument(..., help="Edit id to approve and push."),
+    acknowledge_stops: bool = typer.Option(False, "--acknowledge-stops", help="Confirm you reviewed the draft's changed stop conditions."),
+) -> None:
     """Push an approved edit to the machine as a new [AI] profile."""
 
     async def _run() -> None:
         cfg = _config()
         conn = await db.connect(cfg.db_path)
         try:
-            result = await push_edit(conn, cfg, edit_id)
+            result = await push_edit(conn, cfg, edit_id, acknowledge_stops=acknowledge_stops)
             typer.echo(
                 f"Pushed edit #{edit_id} → saved on machine as "
                 f"'{result['label']} [AI]'"

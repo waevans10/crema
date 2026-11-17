@@ -150,9 +150,7 @@ async def draft_from_review(
             f"sharing all work on '{config.machine}', but its profile-write API "
             "isn't wired up yet."
         )
-    review = await db.get_review(conn, review_id)
-    if review is None:
-        raise RuntimeError(f"Review {review_id} not found.")
+    review = await db.require_rated_review(conn, review_id)
 
     previous: Optional[dict[str, Any]] = None
     if refine_edit_id is not None:
@@ -236,20 +234,28 @@ async def draft_from_review(
     # silently. Any difference vs the base profile is stored on the edit and must
     # be explicitly acknowledged in the UI before the edit can be pushed.
     stop_changes = diff_stop_conditions(base_profile, phases)
-    edit_id = await db.insert_pending_edit(
-        conn,
-        label=profile_json["label"],
-        change_summary=drafted.change_summary,
-        profile=profile_json,
-        review_id=review_id,
-        base_profile_id=str(profile_id),
-        base_profile_label=base_label,
-        notes=user_notes,
-        stop_changes=stop_changes,
-    )
-    if previous is not None:
-        # The refined draft supersedes the old one.
-        await db.set_edit_status(conn, previous["id"], "discarded")
+    try:
+        if previous is not None:
+            changed = await conn.execute(
+                "UPDATE pending_edits SET status='discarded', updated_at=unixepoch('now') "
+                "WHERE id=? AND status='draft'", (previous["id"],),
+            )
+            if changed.rowcount != 1:
+                raise RuntimeError("The original draft changed while refining; no new draft was stored.")
+        edit_id = await db.insert_pending_edit(
+            conn,
+            label=profile_json["label"],
+            change_summary=drafted.change_summary,
+            profile=profile_json,
+            review_id=review_id,
+            base_profile_id=str(profile_id),
+            base_profile_label=base_label,
+            notes=user_notes,
+            stop_changes=stop_changes,
+        )
+    except BaseException:
+        await conn.rollback()
+        raise
     edit = await db.get_pending_edit(conn, edit_id)
     assert edit is not None
     return edit

@@ -6,7 +6,7 @@ import json
 from typing import Any, Literal, Optional
 
 import aiosqlite
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
 class _Strict(BaseModel):
@@ -61,16 +61,29 @@ class CommunityExperiment(_Strict):
 
 class CommunityBundle(_Strict):
     schema_version: Literal[2]
-    participant_id: str = Field(min_length=36, max_length=36)
+    participant_id: str = Field(pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
     machine: Literal["gaggimate", "gaggiuino"]
     shots: list[CommunityShot]
     reviews: list[CommunityReview]
     experiments: list[CommunityExperiment]
 
 
+class SharedBundle(CommunityBundle):
+    terms_version: Literal[2]
+    terms_accepted_at: AwareDatetime
+
+
 def validate_bundle(bundle: dict[str, Any]) -> CommunityBundle:
     """Reject unknown, malformed, or incompatible community data."""
-    parsed = CommunityBundle.model_validate(bundle)
+    if bundle.get("schema_version") != 2:
+        raise ValueError("Only schema version 2 is supported; retain legacy bundles separately.")
+    if "terms_version" in bundle or "terms_accepted_at" in bundle:
+        parsed = SharedBundle.model_validate(bundle)
+    else:
+        parsed = CommunityBundle.model_validate(bundle)
+    experiment_indices = [e.experiment_index for e in parsed.experiments]
+    if len(set(experiment_indices)) != len(experiment_indices):
+        raise ValueError("experiment_index values must be unique")
     shot_indices = {shot.shot_index for shot in parsed.shots}
     if len(shot_indices) != len(parsed.shots):
         raise ValueError("shot_index values must be unique")
@@ -107,23 +120,30 @@ CREATE TABLE IF NOT EXISTS community_experiments (
 
 
 async def import_bundle(conn: aiosqlite.Connection, bundle: dict[str, Any]) -> CommunityBundle:
-    """Validate then atomically upsert a share bundle into a pool SQLite DB."""
+    """Replace one participant's complete snapshot atomically; indices are snapshot-local."""
     parsed = validate_bundle(bundle)
     await conn.executescript(IMPORT_SCHEMA)
-    await conn.execute(
-        "INSERT INTO community_bundles (participant_id, schema_version, machine) VALUES (?, ?, ?) "
-        "ON CONFLICT(participant_id) DO UPDATE SET schema_version=excluded.schema_version, machine=excluded.machine, imported_at=unixepoch('now')",
-        (parsed.participant_id, parsed.schema_version, parsed.machine),
-    )
-    for shot in parsed.shots:
+    await conn.execute("BEGIN IMMEDIATE")
+    try:
+        await conn.execute("DELETE FROM community_shots WHERE participant_id=?", (parsed.participant_id,))
+        await conn.execute("DELETE FROM community_experiments WHERE participant_id=?", (parsed.participant_id,))
         await conn.execute(
-            "INSERT INTO community_shots VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(participant_id, shot_index) DO UPDATE SET relative_day=excluded.relative_day, bean_json=excluded.bean_json, outcome_json=excluded.outcome_json, telemetry_json=excluded.telemetry_json",
-            (parsed.participant_id, shot.shot_index, shot.relative_day, json.dumps(shot.bean.model_dump()), json.dumps(shot.outcome.model_dump()), json.dumps(shot.telemetry)),
+            "INSERT INTO community_bundles (participant_id, schema_version, machine) VALUES (?, ?, ?) "
+            "ON CONFLICT(participant_id) DO UPDATE SET schema_version=excluded.schema_version, machine=excluded.machine, imported_at=unixepoch('now')",
+            (parsed.participant_id, parsed.schema_version, parsed.machine),
         )
-    for experiment in parsed.experiments:
-        await conn.execute(
-            "INSERT INTO community_experiments VALUES (?, ?, ?) ON CONFLICT(participant_id, experiment_index) DO UPDATE SET data_json=excluded.data_json",
-            (parsed.participant_id, experiment.experiment_index, json.dumps(experiment.model_dump())),
-        )
-    await conn.commit()
+        for shot in parsed.shots:
+            await conn.execute(
+                "INSERT INTO community_shots VALUES (?, ?, ?, ?, ?, ?)",
+                (parsed.participant_id, shot.shot_index, shot.relative_day, json.dumps(shot.bean.model_dump()), json.dumps(shot.outcome.model_dump()), json.dumps(shot.telemetry)),
+            )
+        for experiment in parsed.experiments:
+            await conn.execute(
+                "INSERT INTO community_experiments VALUES (?, ?, ?)",
+                (parsed.participant_id, experiment.experiment_index, json.dumps(experiment.model_dump())),
+            )
+        await conn.commit()
+    except BaseException:
+        await conn.rollback()
+        raise
     return parsed

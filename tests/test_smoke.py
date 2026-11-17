@@ -706,7 +706,7 @@ def test_dataset_importer_validates_references_and_writes_rows(tmp_path):
     from crema.dataset import import_bundle, validate_bundle
 
     bundle = {
-        "schema_version": 2, "participant_id": "a" * 36, "machine": "gaggimate",
+        "schema_version": 2, "participant_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "machine": "gaggimate",
         "shots": [{"shot_index": 1, "relative_day": 0, "bean": {"bean_code": "bean_1", "roast_level": "medium", "process": "washed", "roast_age_days": 12}, "outcome": {"cup_rating": 4, "taste_tags": ["sweet"]}, "telemetry": {}}],
         "reviews": [{"shot_index": 1, "assistant_used": True, "confidence": "high", "execution_score": 8}],
         "experiments": [{"experiment_index": 1, "variable": "grind", "direction": "finer", "magnitude": 2, "unit": "grinder_steps", "baseline_execution_score": 7, "baseline_cup_rating": 3, "followup_shot_indices": [1], "status": "closed"}],
@@ -749,7 +749,7 @@ def test_manual_experiment_outcomes_do_not_require_an_ai_review(tmp_path):
                 "resistance": {"annotations": {"erosion": "LOW"}},
             }}
             await crema_db.upsert_shot(conn, "000001", telemetry, bean_id=bean_id)
-            await crema_db.start_experiment(conn, None, bean_id, "one click finer", 10, None)
+            await crema_db.start_experiment(conn, None, bean_id, "one click finer", 10, 3)
             await crema_db.upsert_shot(conn, "000002", telemetry, bean_id=bean_id)
             await crema_db.assign_shot_to_active_experiment(conn, "000002", bean_id)
             active = await crema_db.active_experiment(conn)

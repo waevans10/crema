@@ -507,6 +507,8 @@ _EDIT_LABEL = {
     "pushed": "pushed to machine",
     "discarded": "discarded",
     "failed": "push failed",
+    "pushing": "push in progress — check machine before any recovery",
+    "unknown": "push outcome unknown — check machine",
 }
 
 
@@ -567,8 +569,8 @@ def _render_edits(edits: list[dict[str, Any]]) -> str:
                     f"<p class='muted' style='margin:.5rem 0 0'>Saved to machine as "
                     f"<code>{html.escape(e['label'])} [AI]</code>{did} — select it on the machine to use it.</p>"
                 )
-            elif e["status"] == "failed":
-                actions = f"<p class='c-off' style='margin:.5rem 0 0'>Push failed: {html.escape(e['error'] or '')}</p>"
+            elif e["status"] in {"failed", "unknown"}:
+                actions = f"<p class='c-off' style='margin:.5rem 0 0'>{html.escape(e['error'] or 'Push failed.')}</p>"
             else:
                 actions = ""
         status_label = _EDIT_LABEL.get(e["status"], e["status"])
@@ -1548,8 +1550,8 @@ async def state() -> dict[str, str]:
 async def run_review() -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
-        new_ids = await ingest_new_shots(conn, _cfg)
-        if not new_ids and await db.latest_review(conn) is not None:
+        await ingest_new_shots(conn, _cfg)
+        if not await db.newest_shot_needs_review(conn):
             return RedirectResponse(
                 "/?note=" + quote("No new shots since the last review — nothing to review."),
                 status_code=303,
@@ -1668,6 +1670,8 @@ async def start_experiment(review_id: int = Form(...), variable: str = Form(...)
             return RedirectResponse("/?error=" + quote("Source shot not found."), status_code=303)
         score = review["suggestions"].get("score")
         await db.start_experiment(conn, review_id, shot.get("bean_id"), note, score if isinstance(score, int) else None, shot.get("cup_rating"), variable, direction, amount, unit)
+    except ValueError as e:
+        return _redirect_error(e)
     finally:
         await conn.close()
     return RedirectResponse("/?note=" + quote("Experiment started. New matching-bean shots will be tracked automatically.") + "#experiment", status_code=303)
@@ -1688,6 +1692,8 @@ async def start_manual_experiment(shot_id: str = Form(...), variable: str = Form
         recipe = await db.get_bean(conn, shot["bean_id"]) if shot.get("bean_id") else None
         baseline = round(execution_score(shot["transformed"], recipe=recipe)["score"])
         await db.start_experiment(conn, None, shot.get("bean_id"), note, baseline, shot.get("cup_rating"), variable, direction, amount, unit)
+    except ValueError as e:
+        return _redirect_error(e)
     finally:
         await conn.close()
     return RedirectResponse("/?note=" + quote("Self-guided experiment started — no AI call was made.") + "#experiment", status_code=303)
@@ -1812,12 +1818,6 @@ async def run_draft(
 ) -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
-        review = await db.get_review(conn, review_id)
-        source = await db.get_shot(conn, review["shot_id"]) if review else None
-        if not review or not source:
-            return RedirectResponse("/?error=" + quote("Review source shot not found."), status_code=303)
-        if not source.get("cup_rating"):
-            return RedirectResponse("/?error=" + quote("Rate the source shot before drafting a profile update."), status_code=303)
         await draft_from_review(
             conn, _cfg, review_id, profile_id=profile_id or None,
             user_notes=(notes or "").strip() or None,
@@ -1854,23 +1854,7 @@ async def refine_edit(edit_id: int, notes: str = Form(...)) -> RedirectResponse:
 async def approve_edit(edit_id: int, ack: Optional[str] = Form(None)) -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
-        edit = await db.get_pending_edit(conn, edit_id)
-        if edit and edit.get("review_id"):
-            review = await db.get_review(conn, edit["review_id"])
-            source = await db.get_shot(conn, review["shot_id"]) if review else None
-            if not source or not source.get("cup_rating"):
-                return RedirectResponse("/?error=" + quote("Rate the source shot before approving this profile update."), status_code=303)
-        # A draft that changes stop conditions needs explicit acknowledgement —
-        # enforced here too, not just by the checkbox in the form.
-        if edit and edit.get("stop_changes") and ack != "1":
-            return RedirectResponse(
-                "/?error=" + quote(
-                    f"Draft #{edit_id} changes the shot's stop conditions — tick the "
-                    "acknowledgement box to confirm you've reviewed them before pushing."
-                ),
-                status_code=303,
-            )
-        await push_edit(conn, _cfg, edit_id)
+        await push_edit(conn, _cfg, edit_id, acknowledge_stops=ack == "1")
     except Exception as e:  # noqa: BLE001
         return _redirect_error(e)
     finally:
