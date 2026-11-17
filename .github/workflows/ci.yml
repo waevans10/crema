@@ -19,7 +19,24 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --frozen
 
       - name: Run tests
         run: uv run pytest -q
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+
+      - name: Install worker dependencies
+        run: npm ci --ignore-scripts
+        working-directory: share-worker
+
+      - name: Check worker types
+        run: npm run check
+        working-directory: share-worker
+
+      - name: Test export, collector, and importer contract
+        run: uv run --project .. npm test
+        working-directory: share-worker

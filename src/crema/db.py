@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS pending_edits (
     label              TEXT NOT NULL,          -- proposed label (AI suffix added on push)
     change_summary     TEXT NOT NULL,
     profile_json       TEXT NOT NULL,          -- validated, push-ready device profile
-    status             TEXT NOT NULL DEFAULT 'draft',  -- draft|pushed|discarded|failed
+    status             TEXT NOT NULL DEFAULT 'draft',  -- draft|pushing|pushed|discarded|failed|unknown
     device_profile_id  TEXT,                   -- id returned by the device after push
     error              TEXT,
     notes              TEXT,                   -- barista notes given to Claude for this draft
@@ -262,6 +262,11 @@ async def prune_old(db: aiosqlite.Connection, retention_days: int) -> int:
         f"(SELECT id FROM reviews WHERE shot_id IN {old})",
         (cutoff_secs,),
     )
+    await db.execute(
+        f"UPDATE experiments SET source_review_id=NULL WHERE source_review_id IN "
+        f"(SELECT id FROM reviews WHERE shot_id IN {old})",
+        (cutoff_secs,),
+    )
     await db.execute(f"DELETE FROM reviews WHERE shot_id IN {old}", (cutoff_secs,))
     cur = await db.execute(
         "DELETE FROM shots WHERE created_at < unixepoch('now') - ?", (cutoff_secs,)
@@ -446,6 +451,23 @@ async def get_review(db: aiosqlite.Connection, review_id: int) -> Optional[dict[
     return _review_row(row) if row else None
 
 
+async def newest_shot_needs_review(db: aiosqlite.Connection) -> bool:
+    """Retry stored shots without a successful review, including after ingest-only runs."""
+    shots = await recent_shots(db, limit=1)
+    return bool(shots) and not await latest_reviews_for_shots(db, [shots[0]["id"]])
+
+
+async def require_rated_review(db: aiosqlite.Connection, review_id: int) -> dict[str, Any]:
+    """Apply the same source-cup requirement to every profile-edit entry point."""
+    review = await get_review(db, review_id)
+    shot = await get_shot(db, review["shot_id"]) if review else None
+    if not review or not shot:
+        raise RuntimeError("Review source shot not found.")
+    if not shot.get("cup_rating"):
+        raise RuntimeError("Rate the source shot before changing its profile.")
+    return review
+
+
 # --- pending profile edits (drafted, awaiting approval) ---
 
 
@@ -608,11 +630,13 @@ async def set_bean_recipe(
 
 
 async def start_experiment(
-    db: aiosqlite.Connection, source_review_id: int, bean_id: Optional[int], change_note: str,
+    db: aiosqlite.Connection, source_review_id: Optional[int], bean_id: Optional[int], change_note: str,
     baseline_score: Optional[int], baseline_cup: Optional[int], variable: Optional[str] = None,
     direction: Optional[str] = None, magnitude: Optional[float] = None, unit: Optional[str] = None,
 ) -> int:
     """Start a single active dial-in experiment; close any prior active one."""
+    if baseline_cup not in {1, 2, 3, 4, 5}:
+        raise ValueError("Rate the baseline cup before starting an experiment.")
     await db.execute("UPDATE experiments SET status='closed', closed_at=unixepoch('now') WHERE status='active'")
     cur = await db.execute(
         "INSERT INTO experiments (bean_id, source_review_id, change_note, baseline_score, baseline_cup, variable, direction, magnitude, unit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",

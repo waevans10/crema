@@ -3,6 +3,55 @@
 All notable changes to crema are documented here. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [1.2.0] — 2026-11-17
+
+### Dial-in workflow and reliability
+
+### Added
+
+- Self-guided dial-in guidance without requiring a paid AI review.
+- Structured experiment outcomes with keep, revert, and continue decisions.
+- Canonical version-2 community dataset exports and a SQLite importer.
+
+### Fixed
+
+- Retention preserves experiment baselines while removing expired source reviews.
+- Stored, unreviewed shots are retried after ingest-only runs or review failures.
+- CLI and web share cup-rating and stop-change approval checks.
+- Atomic draft claims prevent duplicate pushes; uncertain device writes are not retried.
+- Refinement/discard cannot overwrite an in-progress push.
+- Version-2 sharing envelopes work through collection and import; imports atomically
+  replace participant snapshots to remove stale indices.
+- Gaggiuino shots join experiments and retain their machine identity and normalized
+  measurements in exports.
+- Unrated baselines are rejected before an existing experiment is closed.
+
+### Maintenance
+
+- Removed unused Jinja2 and its now-unneeded MarkupSafe dependency.
+- Added offline audit regressions and Worker contract/type checks to CI.
+- Updated Wrangler and matching Cloudflare types to clear reported tooling advisories.
+
+### Upgrade notes
+
+- Back up your SQLite database before upgrading, then run `uv sync --frozen`
+  and restart the Crema service.
+- Review-based profile edits require a source cup rating. CLI pushes with changed
+  stop conditions also require `--acknowledge-stops` after reviewing the changes.
+- Deploy the updated sharing Worker before sending version-2 bundles. Older
+  version-1 submissions are rejected; existing stored objects are left untouched.
+- Dataset imports replace a participant's current snapshot; keep raw submissions
+  for historical analysis and import snapshots in collection order.
+- An uncertain device write is not automatically retried. Check the machine for
+  the saved profile before creating another draft.
+- Worker development/CI requires Node 22.18 or newer (CI uses Node 24).
+
+### Validation
+
+75 offline Python tests, 3 Worker contract tests, TypeScript checking, and a
+Worker deployment dry-run pass. Live espresso hardware, paid AI calls, and
+production Worker deployment were not exercised for this release.
+
 ## [1.1.0] — 2026-07-05
 
 ### the cold-start release
@@ -68,3 +117,5 @@ time.
 - Recipe-target profile selection no longer fails when rendering the report.
 
 [1.1.0]: https://github.com/waevans10/crema/releases/tag/v1.1.0
+
+[1.2.0]: https://github.com/waevans10/crema/releases/tag/v1.2.0

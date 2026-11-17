@@ -225,6 +225,7 @@ crema analyze SHOT_ID     # review one specific shot
 crema draft [REVIEW_ID]   # draft a profile edit (--profile-id to target a specific profile)
 crema edits               # list drafted / pushed edits
 crema push EDIT_ID        # approve & push an edit to the machine as a new [AI] profile
+crema push EDIT_ID --acknowledge-stops  # only after reviewing any changed stop conditions
 crema discard EDIT_ID     # discard a drafted edit
 crema bean "NAME" --roast light   # add a bean (--process, --roast-date) and make it active
 crema beans               # list your bean library (* = active)
@@ -469,3 +470,21 @@ Credits:
 - [GaggiMate](https://gaggimate.eu/) by jniebuhr — the open-source smart-controller
   project this works with. “GaggiMate” and “Gaggia” are used descriptively; crema
   is an independent project and is not affiliated with or endorsed by either.
+
+### Profile approval and recovery
+
+Review-based drafts and pushes require a cup rating for the source shot in both
+CLI and web. New-bean starting profiles have no source shot and remain exempt.
+Changed stop conditions require the web checkbox or CLI `--acknowledge-stops`.
+The CLI rejection prints the changes so you can review them before acknowledging.
+
+A draft is claimed before writing to the machine. If the process stops during a
+push, it stays `pushing`; if the response fails or lacks a profile ID, it becomes
+`unknown`. Neither state can be pushed again or discarded through the normal
+controls. Check the machine's saved profiles first: a timeout does not prove the
+write failed. If the profile exists, use it on the machine; if it does not, create
+and approve a new draft. Crema never automatically retries an uncertain write.
+
+Rate the baseline cup before starting an experiment. Existing unrated runs cannot
+recover a missing baseline automatically. Start a new run from a rated shot;
+starting a valid run also closes the old run.

@@ -136,10 +136,22 @@ async def build_export_bundle(conn: aiosqlite.Connection, config: CremaConfig) -
     def telemetry(t: dict[str, Any]) -> dict[str, Any]:
         # Whitelisted numeric/controlled diagnostic shape; no names, IDs, phase
         # labels, raw samples, or user-authored profile fields leave the device.
-        return {
+        result = {
             "duration_seconds": t.get("duration_seconds"), "final_weight_g": t.get("final_weight_g"),
             "summary": t.get("summary"), "diagnostics": t.get("diagnostics"),
         }
+        if config.machine == "gaggiuino":
+            for field in (
+                "peak_pressure_bar", "avg_pressure_bar", "avg_temperature_c",
+                "avg_target_temperature_c", "avg_temp_deviation_c",
+            ):
+                result[field] = t.get(field)
+            result["curves"] = {
+                field: (t.get("curves") or {}).get(field)
+                for field in ("time_s", "pressure_bar", "flow_mls", "weight_g",
+                              "temperature_c", "target_pressure_bar", "target_flow_mls")
+            }
+        return result
 
     followups: dict[int, list[int]] = {}
     for row in experiment_shots:
@@ -149,7 +161,7 @@ async def build_export_bundle(conn: aiosqlite.Connection, config: CremaConfig) -
     bundle = {
         "schema_version": SCHEMA_VERSION,
         "participant_id": install_id,  # random UUID, solely for withdrawal/deduplication
-        "machine": "gaggimate",
+        "machine": config.machine,
         "shots": [
             {
                 "shot_index": shot_index[s["id"]], "relative_day": relative_day(s.get("captured_at")),

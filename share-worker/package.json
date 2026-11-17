@@ -5,11 +5,16 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "types": "wrangler types",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250620.0",
+    "@cloudflare/workers-types": "^5.20261117.1",
     "typescript": "^5.8.0",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.164.0"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
   }
 }
