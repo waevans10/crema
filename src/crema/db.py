@@ -178,6 +178,10 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         # Link to a structured bean (beans table), when one is active at ingest.
         # Nullable — legacy shots and freetext-only setups just leave it NULL.
         await db.execute("ALTER TABLE shots ADD COLUMN bean_id INTEGER")
+    if "grind_setting" not in shot_cols:
+        await db.execute("ALTER TABLE shots ADD COLUMN grind_setting TEXT")
+    if "dose_g" not in shot_cols:
+        await db.execute("ALTER TABLE shots ADD COLUMN dose_g REAL")
     async with db.execute("PRAGMA table_info(beans)") as cur:
         bean_cols = {row["name"] async for row in cur}
     for column, definition in (
@@ -316,7 +320,7 @@ async def recent_shots(db: aiosqlite.Connection, limit: int) -> list[dict[str, A
     Ordered by captured_at when present, falling back to insertion order.
     """
     async with db.execute(
-        "SELECT id, captured_at, transformed, tasting_notes, cup_rating, coffee, bean_id FROM shots "
+        "SELECT id, captured_at, transformed, tasting_notes, cup_rating, coffee, bean_id, grind_setting, dose_g FROM shots "
         "ORDER BY COALESCE(captured_at, created_at) DESC, rowid DESC LIMIT ?",
         (limit,),
     ) as cur:
@@ -333,13 +337,15 @@ def _shot_row(row: aiosqlite.Row) -> dict[str, Any]:
         "cup_rating": row["cup_rating"],
         "coffee": row["coffee"],
         "bean_id": row["bean_id"],
+        "grind_setting": row["grind_setting"],
+        "dose_g": row["dose_g"],
     }
 
 
 async def get_shot(db: aiosqlite.Connection, shot_id: str) -> Optional[dict[str, Any]]:
     """Return a single shot's stored data by id, or None."""
     async with db.execute(
-        "SELECT id, captured_at, transformed, tasting_notes, cup_rating, coffee, bean_id FROM shots WHERE id = ?",
+        "SELECT id, captured_at, transformed, tasting_notes, cup_rating, coffee, bean_id, grind_setting, dose_g FROM shots WHERE id = ?",
         (shot_id,),
     ) as cur:
         row = await cur.fetchone()
@@ -377,6 +383,17 @@ async def set_shot_tasting_notes(
 async def set_shot_cup_rating(db: aiosqlite.Connection, shot_id: str, rating: Optional[int]) -> bool:
     """Save the barista's 1–5 cup rating, independently of machine execution."""
     cur = await db.execute("UPDATE shots SET cup_rating = ? WHERE id = ?", (rating, shot_id))
+    await db.commit()
+    return bool(cur.rowcount)
+
+
+async def set_shot_grind_dose(
+    db: aiosqlite.Connection, shot_id: str, grind: Optional[str], dose_g: Optional[float]
+) -> bool:
+    """Save what the barista actually ground and dosed for this shot."""
+    cur = await db.execute(
+        "UPDATE shots SET grind_setting = ?, dose_g = ? WHERE id = ?", (grind, dose_g, shot_id)
+    )
     await db.commit()
     return bool(cur.rowcount)
 

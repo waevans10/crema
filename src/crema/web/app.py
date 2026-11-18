@@ -1791,11 +1791,30 @@ async def run_analyze(shot_id: str = Form(...)) -> RedirectResponse:
     return RedirectResponse("/", status_code=303)
 
 
+def parse_dose(raw: str) -> Optional[float]:
+    """Blank → None; grams 5–30 (comma decimals allowed); anything else is a typo."""
+    raw = raw.strip().replace(",", ".")
+    if not raw:
+        return None
+    try:
+        dose = float(raw)
+    except ValueError:
+        dose = 0.0
+    if not 5 <= dose <= 30:  # also rejects nan/inf
+        raise ValueError("Dose must be a number of grams between 5 and 30.")
+    return dose
+
+
 @app.post("/shots/{shot_id}/tasting-notes")
 async def save_tasting_notes(
-    shot_id: str, notes: str = Form(""), coffee: str = Form(""), cup_rating: str = Form("")
+    shot_id: str, notes: str = Form(""), coffee: str = Form(""), cup_rating: str = Form(""),
+    grind: str = Form(""), dose: str = Form(""),
 ) -> RedirectResponse:
-    """Save the barista's tasting notes and/or beans on a shot for future reviews."""
+    """Save the barista's tasting notes, beans, grind and dose on a shot for future reviews."""
+    try:
+        dose_g = parse_dose(dose)
+    except ValueError as e:
+        return _redirect_error(e)
     conn = await db.connect(_cfg.db_path)
     try:
         found = await db.set_shot_tasting_notes(conn, shot_id, notes.strip()[:500] or None)
@@ -1803,6 +1822,7 @@ async def save_tasting_notes(
             await db.set_shot_coffee(conn, shot_id, coffee.strip()[:300] or None)
             rating = int(cup_rating) if cup_rating in {"1", "2", "3", "4", "5"} else None
             await db.set_shot_cup_rating(conn, shot_id, rating)
+            await db.set_shot_grind_dose(conn, shot_id, grind.strip()[:20] or None, dose_g)
     finally:
         await conn.close()
     if not found:
