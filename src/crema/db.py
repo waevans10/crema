@@ -387,6 +387,35 @@ async def set_shot_cup_rating(db: aiosqlite.Connection, shot_id: str, rating: Op
     return bool(cur.rowcount)
 
 
+async def grind_dose_prefill(
+    db: aiosqlite.Connection, shot: dict[str, Any]
+) -> tuple[Optional[str], Optional[float]]:
+    """The shot's own grind/dose, else the latest earlier shot on its bean, else the bean's dose target."""
+    grind, dose = shot.get("grind_setting"), shot.get("dose_g")
+    if not shot.get("bean_id"):
+        return grind, dose
+    for column in ("grind_setting", "dose_g"):
+        if (grind if column == "grind_setting" else dose) is not None:
+            continue
+        # Earlier only: editing an old shot must not pick up a later change.
+        async with db.execute(
+            f"SELECT {column} FROM shots WHERE bean_id = ? AND {column} IS NOT NULL "
+            "AND (COALESCE(captured_at, created_at), rowid) < "
+            "(SELECT COALESCE(captured_at, created_at), rowid FROM shots WHERE id = ?) "
+            "ORDER BY COALESCE(captured_at, created_at) DESC, rowid DESC LIMIT 1",
+            (shot["bean_id"], shot["id"]),
+        ) as cur:
+            row = await cur.fetchone()
+        if row and column == "grind_setting":
+            grind = row[0]
+        elif row:
+            dose = row[0]
+    if dose is None:
+        bean = await get_bean(db, shot["bean_id"])
+        dose = bean["target_dose_g"] if bean else None
+    return grind, dose
+
+
 async def set_shot_grind_dose(
     db: aiosqlite.Connection, shot_id: str, grind: Optional[str], dose_g: Optional[float]
 ) -> bool:

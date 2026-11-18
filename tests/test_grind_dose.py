@@ -67,3 +67,65 @@ def test_prompt_includes_grind_dose():
     assert 'GRIND: 12' in message and 'DOSE: 18.0 g' in message
     bare = build_user_message([{'id': '1', 'transformed': {}}])
     assert 'GRIND' not in bare and 'DOSE' not in bare
+
+
+async def _bean(conn, dose=None):
+    bean_id = await db.insert_bean(conn, 'Guji', 'light')
+    if dose is not None:
+        await db.set_bean_recipe(conn, bean_id, dose, None, None, None)
+    return bean_id
+
+
+async def _shot(conn, sid, t, bean_id, grind=None, dose=None, weight=None, rating=None):
+    await db.upsert_shot(conn, sid, {'final_weight_g': weight} if weight else {}, captured_at=t, bean_id=bean_id)
+    await db.set_shot_grind_dose(conn, sid, grind, dose)
+    if rating:
+        await db.set_shot_cup_rating(conn, sid, rating)
+    return await db.get_shot(conn, sid)
+
+
+async def test_prefill_uses_earlier_shot_on_same_bean(conn):
+    bean = await _bean(conn, dose=18)
+    await _shot(conn, '1', 100, bean, '12', 18.5)
+    shot2 = await _shot(conn, '2', 200, bean)
+    assert await db.grind_dose_prefill(conn, shot2) == ('12', 18.5)
+
+
+async def test_prefill_never_uses_later_shot(conn):
+    bean = await _bean(conn)
+    shot1 = await _shot(conn, '1', 100, bean, '12', 18.5)
+    shot2 = await _shot(conn, '2', 200, bean)
+    await _shot(conn, '3', 300, bean, '9', 17.0)
+    assert await db.grind_dose_prefill(conn, shot2) == ('12', 18.5)
+    assert await db.grind_dose_prefill(conn, shot1) == ('12', 18.5)
+
+
+async def test_prefill_ignores_other_beans(conn):
+    bean, other = await _bean(conn), await _bean(conn)
+    await _shot(conn, '1', 100, other, '30', 20.0)
+    shot2 = await _shot(conn, '2', 200, bean)
+    assert await db.grind_dose_prefill(conn, shot2) == (None, None)
+
+
+async def test_prefill_falls_back_to_bean_dose(conn):
+    bean = await _bean(conn, dose=17)
+    shot = await _shot(conn, '1', 100, bean)
+    assert await db.grind_dose_prefill(conn, shot) == (None, 17.0)
+
+
+async def test_prefill_without_bean(conn):
+    await _bean(conn, dose=17)
+    shot = await _shot(conn, '1', 100, None)
+    assert await db.grind_dose_prefill(conn, shot) == (None, None)
+
+
+async def test_forms_render_prefilled_inputs(conn, web):
+    bean_id = await _bean(conn)
+    shot = await _shot(conn, '1', 100, bean_id)
+    bean = await db.get_bean(conn, bean_id)
+    prefill = {'1': ('12"><b>', 18.5)}
+    baseline = web._workflow_prompt(shot, bean, None, prefill)
+    assert "name='grind'" in baseline and "value='12&quot;&gt;&lt;b&gt;'" in baseline
+    assert "name='dose'" in baseline and "value='18.5'" in baseline
+    notebook = web._render_shots([shot], {}, prefill)
+    assert "name='grind'" in notebook and "value='18.5'" in notebook
