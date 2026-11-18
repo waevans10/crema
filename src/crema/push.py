@@ -77,8 +77,8 @@ async def discard_edit(conn: aiosqlite.Connection, edit_id: int) -> None:
     """Mark a drafted edit as discarded."""
     changed = await conn.execute(
         "UPDATE pending_edits SET status='discarded', updated_at=unixepoch('now') "
-        "WHERE id=? AND status='draft'", (edit_id,),
+        "WHERE id=? AND status IN ('draft', 'unknown')", (edit_id,),
     )
     await conn.commit()
     if changed.rowcount != 1:
-        raise RuntimeError("Only an awaiting-approval draft can be discarded.")
+        raise RuntimeError("Only a draft or an unknown-outcome push can be discarded.")

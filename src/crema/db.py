@@ -12,6 +12,7 @@ Later phases add `pending_edits` (drafted profile changes awaiting approval) and
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -177,6 +178,10 @@ async def _migrate(db: aiosqlite.Connection) -> None:
         # Link to a structured bean (beans table), when one is active at ingest.
         # Nullable — legacy shots and freetext-only setups just leave it NULL.
         await db.execute("ALTER TABLE shots ADD COLUMN bean_id INTEGER")
+    if "grind_setting" not in shot_cols:
+        await db.execute("ALTER TABLE shots ADD COLUMN grind_setting TEXT")
+    if "dose_g" not in shot_cols:
+        await db.execute("ALTER TABLE shots ADD COLUMN dose_g REAL")
     async with db.execute("PRAGMA table_info(beans)") as cur:
         bean_cols = {row["name"] async for row in cur}
     for column, definition in (
@@ -315,7 +320,7 @@ async def recent_shots(db: aiosqlite.Connection, limit: int) -> list[dict[str, A
     Ordered by captured_at when present, falling back to insertion order.
     """
     async with db.execute(
-        "SELECT id, captured_at, transformed, tasting_notes, cup_rating, coffee, bean_id FROM shots "
+        "SELECT id, captured_at, transformed, tasting_notes, cup_rating, coffee, bean_id, grind_setting, dose_g FROM shots "
         "ORDER BY COALESCE(captured_at, created_at) DESC, rowid DESC LIMIT ?",
         (limit,),
     ) as cur:
@@ -332,13 +337,15 @@ def _shot_row(row: aiosqlite.Row) -> dict[str, Any]:
         "cup_rating": row["cup_rating"],
         "coffee": row["coffee"],
         "bean_id": row["bean_id"],
+        "grind_setting": row["grind_setting"],
+        "dose_g": row["dose_g"],
     }
 
 
 async def get_shot(db: aiosqlite.Connection, shot_id: str) -> Optional[dict[str, Any]]:
     """Return a single shot's stored data by id, or None."""
     async with db.execute(
-        "SELECT id, captured_at, transformed, tasting_notes, cup_rating, coffee, bean_id FROM shots WHERE id = ?",
+        "SELECT id, captured_at, transformed, tasting_notes, cup_rating, coffee, bean_id, grind_setting, dose_g FROM shots WHERE id = ?",
         (shot_id,),
     ) as cur:
         row = await cur.fetchone()
@@ -376,6 +383,59 @@ async def set_shot_tasting_notes(
 async def set_shot_cup_rating(db: aiosqlite.Connection, shot_id: str, rating: Optional[int]) -> bool:
     """Save the barista's 1–5 cup rating, independently of machine execution."""
     cur = await db.execute("UPDATE shots SET cup_rating = ? WHERE id = ?", (rating, shot_id))
+    await db.commit()
+    return bool(cur.rowcount)
+
+
+async def best_shot_for_bean(db: aiosqlite.Connection, bean_id: int) -> Optional[dict[str, Any]]:
+    """The highest-rated (4–5) shot on a bean, newest first among ties — the recipe to repeat."""
+    async with db.execute(
+        "SELECT id, captured_at, transformed, tasting_notes, cup_rating, coffee, bean_id, grind_setting, dose_g "
+        "FROM shots WHERE bean_id = ? AND cup_rating >= 4 "
+        "ORDER BY cup_rating DESC, COALESCE(captured_at, created_at) DESC, rowid DESC LIMIT 1",
+        (bean_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _shot_row(row) if row else None
+
+
+async def grind_dose_prefill(
+    db: aiosqlite.Connection, shot: dict[str, Any]
+) -> tuple[Optional[str], Optional[float]]:
+    """The shot's own grind/dose, else the latest earlier shot on its bean, else the bean's dose target."""
+    grind, dose = shot.get("grind_setting"), shot.get("dose_g")
+    if not shot.get("bean_id"):
+        return grind, dose
+    for column in ("grind_setting", "dose_g"):
+        if (grind if column == "grind_setting" else dose) is not None:
+            continue
+        # Earlier only: editing an old shot must not pick up a later change.
+        async with db.execute(
+            f"SELECT {column} FROM shots WHERE bean_id = ? AND {column} IS NOT NULL "
+            "AND (COALESCE(captured_at, created_at), rowid) < "
+            "(SELECT COALESCE(captured_at, created_at), rowid FROM shots WHERE id = ?) "
+            "ORDER BY COALESCE(captured_at, created_at) DESC, rowid DESC LIMIT 1",
+            (shot["bean_id"], shot["id"]),
+        ) as cur:
+            row = await cur.fetchone()
+        if row and column == "grind_setting":
+            grind = row[0]
+        elif row:
+            dose = row[0]
+    if dose is None:
+        bean = await get_bean(db, shot["bean_id"])
+        target = bean["target_dose_g"] if bean else None
+        dose = target if target is not None and 5 <= target <= 30 else None  # must pass parse_dose
+    return grind, dose
+
+
+async def set_shot_grind_dose(
+    db: aiosqlite.Connection, shot_id: str, grind: Optional[str], dose_g: Optional[float]
+) -> bool:
+    """Save what the barista actually ground and dosed for this shot."""
+    cur = await db.execute(
+        "UPDATE shots SET grind_setting = ?, dose_g = ? WHERE id = ?", (grind, dose_g, shot_id)
+    )
     await db.commit()
     return bool(cur.rowcount)
 
@@ -451,10 +511,19 @@ async def get_review(db: aiosqlite.Connection, review_id: int) -> Optional[dict[
     return _review_row(row) if row else None
 
 
-async def newest_shot_needs_review(db: aiosqlite.Connection) -> bool:
+REVIEW_RETRY_SECONDS = 3 * 3600
+
+
+async def newest_shot_needs_review(db: aiosqlite.Connection, honor_backoff: bool = True) -> bool:
     """Retry stored shots without a successful review, including after ingest-only runs."""
     shots = await recent_shots(db, limit=1)
-    return bool(shots) and not await latest_reviews_for_shots(db, [shots[0]["id"]])
+    if not shots or await latest_reviews_for_shots(db, [shots[0]["id"]]):
+        return False
+    if not honor_backoff:  # a person asking again (e.g. after fixing the API key) always retries
+        return True
+    shot_id, _, failed_at = (await get_setting(db, "review_failed") or "").rpartition(":")
+    # shortcut: fixed 3h backoff after a failed review, make it configurable if needed.
+    return not (shot_id == shots[0]["id"] and failed_at.isdigit() and time.time() - int(failed_at) < REVIEW_RETRY_SECONDS)
 
 
 async def require_rated_review(db: aiosqlite.Connection, review_id: int) -> dict[str, Any]:

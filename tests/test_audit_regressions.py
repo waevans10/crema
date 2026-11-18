@@ -2,7 +2,7 @@
 import asyncio
 import json
 import sqlite3
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -141,7 +141,7 @@ async def test_only_one_push_claims_draft(conn, tmp_path):
         await second.close()
 
 
-async def test_ambiguous_push_cannot_be_retried_or_discarded(conn):
+async def test_ambiguous_push_cannot_be_retried_but_can_be_discarded(conn):
     from crema.push import discard_edit
     eid = await db.insert_pending_edit(conn, 'test', 'test',
         {'label': 'test', 'temperature': 93, 'phases': []})
@@ -151,10 +151,12 @@ async def test_ambiguous_push_cannot_be_retried_or_discarded(conn):
             await push_edit(conn, CremaConfig(), eid)
         with pytest.raises(RuntimeError):
             await push_edit(conn, CremaConfig(), eid)
-        with pytest.raises(RuntimeError):
-            await discard_edit(conn, eid)
         assert client.return_value.create_or_update_profile.await_count == 1
     assert (await db.get_pending_edit(conn, eid))['status'] == 'unknown'
+    await discard_edit(conn, eid)
+    assert (await db.get_pending_edit(conn, eid))['status'] == 'discarded'
+    with pytest.raises(RuntimeError):
+        await discard_edit(conn, eid)
 
 
 async def test_unrated_baseline_does_not_close_existing_experiment(conn):
@@ -244,3 +246,39 @@ async def test_refinement_cannot_discard_a_claimed_push(conn):
             await draft_from_review(conn, CremaConfig(), rid, refine_edit_id=eid)
     assert (await db.get_pending_edit(conn, eid))['status'] == 'pushing'
     assert len(await db.list_pending_edits(conn)) == 1
+
+
+async def test_failed_review_backs_off_instead_of_retrying_every_tick(conn):
+    from crema import review
+    await db.upsert_shot(conn, '1', {'duration_seconds': 25}, captured_at=100)
+    assert await db.newest_shot_needs_review(conn)
+    with patch('crema.review.AsyncAnthropic') as client:
+        client.return_value.messages.parse = AsyncMock(side_effect=RuntimeError('boom'))
+        with pytest.raises(RuntimeError):
+            await review.review_recent(conn, CremaConfig())
+    assert not await db.newest_shot_needs_review(conn)
+    await db.set_setting(conn, 'review_failed', f"1:{int(__import__('time').time()) - db.REVIEW_RETRY_SECONDS - 1}")
+    assert await db.newest_shot_needs_review(conn)
+    await db.upsert_shot(conn, '2', {'duration_seconds': 25}, captured_at=200)
+    await db.set_setting(conn, 'review_failed', f"1:{int(__import__('time').time())}")
+    assert await db.newest_shot_needs_review(conn)  # backoff is per shot
+
+
+def test_participant_id_is_lowercased_on_import():
+    bundle = {'schema_version': 2, 'participant_id': 'ABCDEF01-2345-6789-ABCD-EF0123456789',
+              'machine': 'gaggimate', 'shots': [], 'reviews': [], 'experiments': []}
+    assert validate_bundle(bundle).participant_id == 'abcdef01-2345-6789-abcd-ef0123456789'
+
+
+async def test_failure_after_claude_call_also_backs_off(conn):
+    from crema import review
+    await db.upsert_shot(conn, '1', {'duration_seconds': 25}, captured_at=100)
+    response = MagicMock()
+    response.parsed_output.model_dump.return_value = {'score': 7}
+    parsed = AsyncMock(return_value=response)
+    with patch('crema.review.AsyncAnthropic') as client, \
+            patch('crema.review.execution_score', side_effect=KeyError('telemetry')):
+        client.return_value.messages.parse = parsed
+        with pytest.raises(KeyError):
+            await review.review_recent(conn, CremaConfig())
+    assert not await db.newest_shot_needs_review(conn)

@@ -1,6 +1,6 @@
 [project]
 name = "crema"
-version = "1.2.0"
+version = "1.3.0"
 description = "Automated GaggiMate shot-history reviewer that uses Claude to suggest grind/dose/profile adjustments."
 readme = "README.md"
 requires-python = ">=3.13"

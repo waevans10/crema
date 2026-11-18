@@ -6,7 +6,7 @@ import json
 from typing import Any, Literal, Optional
 
 import aiosqlite
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 
 class _Strict(BaseModel):
@@ -66,6 +66,11 @@ class CommunityBundle(_Strict):
     shots: list[CommunityShot]
     reviews: list[CommunityReview]
     experiments: list[CommunityExperiment]
+
+    @field_validator("participant_id")
+    @classmethod
+    def _lower(cls, v: str) -> str:
+        return v.lower()  # the worker keys storage by the lowercase id
 
 
 class SharedBundle(CommunityBundle):

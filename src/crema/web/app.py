@@ -195,6 +195,9 @@ h2{font-size:.82rem;text-transform:uppercase;letter-spacing:.08em;color:var(--mu
 .btn-sm{padding:.24rem .6rem;font-size:.82rem;border-radius:8px}
 select{font:inherit;color:var(--text);background:var(--surface-2);
   border:1px solid var(--border);border-radius:8px;padding:.35rem .5rem}
+label.gd{display:inline-flex;align-items:center;gap:.35rem;font-size:.82rem;margin:.4rem .6rem 0 0}
+label.gd input{font:inherit;font-size:16px;width:5.5rem;color:var(--text);background:var(--surface-2);
+  border:1px solid var(--border);border-radius:8px;padding:.35rem .5rem}
 ul.changes{margin:.3rem 0;padding-left:1.1rem}
 ul.changes li{margin:.25rem 0}
 code{background:var(--surface-2);border:1px solid var(--border);border-radius:6px;
@@ -571,6 +574,11 @@ def _render_edits(edits: list[dict[str, Any]]) -> str:
                 )
             elif e["status"] in {"failed", "unknown"}:
                 actions = f"<p class='c-off' style='margin:.5rem 0 0'>{html.escape(e['error'] or 'Push failed.')}</p>"
+                if e["status"] == "unknown":
+                    actions += (
+                        f"<form method='post' action='/edits/{e['id']}/discard' class='inline'>"
+                        "<button class='btn btn-sm btn-ghost' type='submit'>Discard</button></form>"
+                    )
             else:
                 actions = ""
         status_label = _EDIT_LABEL.get(e["status"], e["status"])
@@ -751,6 +759,7 @@ def _taste_guide_html() -> str:
 def _render_shots(
     shots: list[dict[str, Any]],
     reviews_by_shot: Optional[dict[str, dict[str, Any]]] = None,
+    prefill: Optional[dict[str, tuple[Optional[str], Optional[float]]]] = None,
 ) -> str:
     if not shots:
         return "<div class='card muted'>No shots ingested yet.</div>"
@@ -767,6 +776,10 @@ def _render_shots(
             summary_bits.append(f"Tasting notes: {html.escape(notes)}")
         if cup_rating:
             summary_bits.append(f"Cup rating: {cup_rating}/5")
+        if sh.get("grind_setting"):
+            summary_bits.append(f"grind {html.escape(sh['grind_setting'])}")
+        if sh.get("dose_g"):
+            summary_bits.append(f"{sh['dose_g']:g} g in")
         summary = " · ".join(summary_bits) or "Add beans / tasting notes for this shot"
         hint = _taste_hint(sh, (reviews_by_shot or {}).get(sh["id"]))
         hint_html = (
@@ -796,6 +809,7 @@ def _render_shots(
                   <label class="muted" style="display:block;font-size:.82rem;margin-top:.45rem">How was the cup?
                     <select name="cup_rating"><option value="">not rated</option>{''.join(f"<option value='{n}'{' selected' if cup_rating == n else ''}>{n}/5</option>" for n in range(1, 6))}</select>
                   </label>
+                  <div class="row">{_grind_dose_inputs(*(prefill or {}).get(sh["id"], (sh.get("grind_setting"), sh.get("dose_g"))))}</div>
                   <textarea name="notes" rows="2" style="margin-top:.4rem" placeholder="e.g. sour and thin — goes into the next review as taste feedback">{html.escape(notes)}</textarea>
                   <button class="btn btn-sm btn-ghost" type="submit">Save</button>
                 </form>
@@ -1078,7 +1092,50 @@ def _learning_lesson(shot: Optional[dict[str, Any]]) -> str:
     </div>"""
 
 
-def _workflow_prompt(shot: Optional[dict[str, Any]], bean: Optional[dict[str, Any]], experiment: Optional[dict[str, Any]]) -> str:
+def _pull_card(bean: dict[str, Any], shot: Optional[dict[str, Any]]) -> str:
+    """The best-rated shot on this bean, as the recipe to pull again."""
+    if not shot:
+        return ""
+    dose, out = shot.get("dose_g"), shot["transformed"].get("final_weight_g")
+    parts = [f"Grind <b>{html.escape(shot['grind_setting'])}</b>"] if shot.get("grind_setting") else []
+    if dose and out:
+        parts.append(f"{dose:g} g in → {out:g} g out")
+    elif dose:
+        parts.append(f"{dose:g} g in")
+    elif out:
+        parts.append(f"{out:g} g out")
+    rating = int(shot["cup_rating"])
+    parts.append(f"<span class='stars' role='img' aria-label='rated {rating} of 5'>{'★' * rating}{'☆' * (5 - rating)}</span>")
+    save = ""
+    # A missing value keeps the bean's existing target rather than erasing it.
+    if (dose or out) and (dose or bean.get("target_dose_g"), out or bean.get("target_yield_g")) != (bean.get("target_dose_g"), bean.get("target_yield_g")):
+        save = (
+            f"<form method='post' action='/beans/{int(bean['id'])}/recipe-from-shot' class='inline'>"
+            f"<input type='hidden' name='shot_id' value='{html.escape(shot['id'])}'>"
+            "<button class='btn btn-sm btn-ghost' type='submit'>Save as this bean's recipe</button></form>"
+        )
+    return (
+        f"<div class='card pull'><span class='muted'>Your best on {html.escape(bean['name'])}</span>"
+        f"<p class='lead' style='margin:.3rem 0'>{' · '.join(parts)}</p>"
+        f"<div class='row'><span class='muted' style='font-size:.82rem'>pulled {html.escape(_fmt_shot_time(shot))}</span>{save}</div></div>"
+    )
+
+
+def _grind_dose_inputs(grind: Optional[str], dose: Optional[float]) -> str:
+    """Grind + dose boxes, prefilled so an unchanged recipe is just a tap on Save."""
+    dose_value = f"{dose:g}" if dose is not None else ""
+    return (
+        "<label class='muted gd'>Grind <input name='grind' type='text' maxlength='20' "
+        f"placeholder='e.g. 12' value='{html.escape(grind or '')}'></label>"
+        "<label class='muted gd'>Dose (g) <input name='dose' type='text' inputmode='decimal' "
+        f"placeholder='18' value='{html.escape(dose_value)}'></label>"
+    )
+
+
+def _workflow_prompt(
+    shot: Optional[dict[str, Any]], bean: Optional[dict[str, Any]], experiment: Optional[dict[str, Any]],
+    prefill: Optional[dict[str, tuple[Optional[str], Optional[float]]]] = None,
+) -> str:
     """The evidence sequence that keeps each shared/local record interpretable."""
     if not bean:
         return """<div class='card workflow'><b>Start with context</b><div class='step'><span class='n'>1</span><span>Set the bean and its recipe target before the next shot, so results are comparable.</span></div><a class='btn btn-sm' href='/?view=setup'>Set up this bean</a></div>"""
@@ -1088,7 +1145,7 @@ def _workflow_prompt(shot: Optional[dict[str, Any]], bean: Optional[dict[str, An
         coffee = html.escape(shot.get("coffee") or "")
         notes = html.escape(shot.get("tasting_notes") or "")
         options = "".join(f"<option value='{n}'>{n}/5</option>" for n in range(1, 6))
-        return f"""<div class='card workflow'><b>Close the loop: taste this baseline</b><div class='step'><span class='n'>2</span><span>Telemetry describes execution; your cup rating tells us whether it was actually better.</span></div><form method='post' action='/shots/{html.escape(shot['id'])}/tasting-notes' class='row'><input type='hidden' name='coffee' value='{coffee}'><input type='hidden' name='notes' value='{notes}'><select name='cup_rating' required><option value='' selected disabled>rate the cup</option>{options}</select><button class='btn btn-sm'>Save cup rating</button></form></div>"""
+        return f"""<div class='card workflow'><b>Close the loop: taste this baseline</b><div class='step'><span class='n'>2</span><span>Telemetry describes execution; your cup rating tells us whether it was actually better.</span></div><form method='post' action='/shots/{html.escape(shot['id'])}/tasting-notes' class='row'><input type='hidden' name='coffee' value='{coffee}'><input type='hidden' name='notes' value='{notes}'><select name='cup_rating' required aria-label='Cup rating'><option value='' selected disabled>rate the cup</option>{options}</select>{_grind_dose_inputs(*(prefill or {}).get(shot['id'], (shot.get('grind_setting'), shot.get('dose_g'))))}<button class='btn btn-sm'>Save cup rating</button></form></div>"""
     if experiment:
         return """<div class='card workflow'><b>Protect the experiment</b><div class='step'><span class='n'>3</span><span>Pull and rate follow-up shots. Keep every other variable steady until you have an outcome.</span></div></div>"""
     return """<div class='card workflow'><b>Choose one testable change</b><div class='step'><span class='n'>3</span><span>Select a controlled variable, direction, amount, and unit below. That makes the next result useful to you and safe to aggregate anonymously.</span></div></div>"""
@@ -1442,6 +1499,8 @@ async def index(view: str = "now", error: Optional[str] = None, note: Optional[s
         active_bean = await db.active_bean(conn)
         experiment = await db.active_experiment(conn)
         reviews_by_shot = await db.latest_reviews_for_shots(conn, [s["id"] for s in shots])
+        prefill = {s["id"]: await db.grind_dose_prefill(conn, s) for s in shots}
+        best_shot = await db.best_shot_for_bean(conn, active_bean["id"]) if active_bean else None
     finally:
         await conn.close()
     view = view if view in {"now", "learn", "history", "setup"} else "now"
@@ -1490,9 +1549,10 @@ async def index(view: str = "now", error: Optional[str] = None, note: Optional[s
         content = f"""
           {_aging_banner(active_bean)}
           <h2>Now</h2>
+          {_pull_card(active_bean, best_shot) if active_bean else ''}
           <div class="card"><span class="lead">{html.escape(active_bean['name']) if active_bean else 'No active bean'}</span>
             <span class="muted"> · {html.escape(str(current_shot['id']) if current_shot else 'pull a shot to begin')}</span></div>
-          {_workflow_prompt(current_shot, active_bean, experiment)}
+          {_workflow_prompt(current_shot, active_bean, experiment, prefill)}
           <h2>Next-shot plan</h2>{plan}
           {profile_update}
           <details class="card"><summary><b>Ask AI for an interpretation</b><span class="muted"> · optional</span></summary>
@@ -1504,7 +1564,7 @@ async def index(view: str = "now", error: Optional[str] = None, note: Optional[s
         content = f"<h2>Learn</h2>{_learning_lesson(current_shot)}"
     elif view == "history":
         content = f"""<h2>History</h2><div class="card row"><a class="btn btn-sm" href="/compare">Compare shots</a><a class="btn btn-sm btn-ghost" href="/trends">View trends</a></div>
-          <details class="sec" open><summary><h2>Shot notebook</h2></summary>{_render_shots(shots, reviews_by_shot)}</details>"""
+          <details class="sec" open><summary><h2>Shot notebook</h2></summary>{_render_shots(shots, reviews_by_shot, prefill)}</details>"""
     else:
         content = f"""
           <h2>Setup</h2>
@@ -1551,7 +1611,7 @@ async def run_review() -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
         await ingest_new_shots(conn, _cfg)
-        if not await db.newest_shot_needs_review(conn):
+        if not await db.newest_shot_needs_review(conn, honor_backoff=False):
             return RedirectResponse(
                 "/?note=" + quote("No new shots since the last review — nothing to review."),
                 status_code=303,
@@ -1635,6 +1695,25 @@ async def save_recipe(
     if not saved:
         return RedirectResponse("/?error=" + quote("Bean not found."), status_code=303)
     return RedirectResponse("/?note=" + quote("Recipe targets saved — future reviews of this bean score against them.") + "#recipe", status_code=303)
+
+
+@app.post("/beans/{bean_id}/recipe-from-shot")
+async def save_recipe_from_shot(bean_id: int, shot_id: str = Form(...)) -> RedirectResponse:
+    """Copy a liked shot's dose and yield into the bean's recipe; keep its profile and cup style."""
+    conn = await db.connect(_cfg.db_path)
+    try:
+        bean = await db.get_bean(conn, bean_id)
+        shot = await db.get_shot(conn, shot_id)
+        if not bean or not shot or shot["bean_id"] != bean_id:
+            return RedirectResponse("/?error=" + quote("Recipe not saved — that shot was pulled with a different bean."), status_code=303)
+        await db.set_bean_recipe(
+            conn, bean_id, shot["dose_g"] or bean["target_dose_g"],
+            shot["transformed"].get("final_weight_g") or bean["target_yield_g"],
+            bean["target_profile_id"], bean["cup_style"],
+        )
+    finally:
+        await conn.close()
+    return RedirectResponse("/?note=" + quote(f"Recipe saved for {bean['name']} — future shots of this bean score against it.") + "#recipe", status_code=303)
 
 
 def _experiment_input(variable: str, direction: str, magnitude: str, unit: str, note: str) -> tuple[str, str, Optional[float], str, str]:
@@ -1786,11 +1865,30 @@ async def run_analyze(shot_id: str = Form(...)) -> RedirectResponse:
     return RedirectResponse("/", status_code=303)
 
 
+def parse_dose(raw: str) -> Optional[float]:
+    """Blank → None; grams 5–30 (comma decimals allowed); anything else is a typo."""
+    if not raw.strip():
+        return None
+    raw = raw.strip().lower().removesuffix("g").strip().replace(",", ".")
+    try:
+        dose = float(raw)
+    except ValueError:
+        dose = 0.0
+    if not 5 <= dose <= 30:  # also rejects nan/inf
+        raise ValueError("Nothing saved — dose must be grams between 5 and 30, like 18 or 18.5.")
+    return dose
+
+
 @app.post("/shots/{shot_id}/tasting-notes")
 async def save_tasting_notes(
-    shot_id: str, notes: str = Form(""), coffee: str = Form(""), cup_rating: str = Form("")
+    shot_id: str, notes: str = Form(""), coffee: str = Form(""), cup_rating: str = Form(""),
+    grind: str = Form(""), dose: str = Form(""),
 ) -> RedirectResponse:
-    """Save the barista's tasting notes and/or beans on a shot for future reviews."""
+    """Save the barista's tasting notes, beans, grind and dose on a shot for future reviews."""
+    try:
+        dose_g = parse_dose(dose)
+    except ValueError as e:
+        return _redirect_error(e)
     conn = await db.connect(_cfg.db_path)
     try:
         found = await db.set_shot_tasting_notes(conn, shot_id, notes.strip()[:500] or None)
@@ -1798,6 +1896,7 @@ async def save_tasting_notes(
             await db.set_shot_coffee(conn, shot_id, coffee.strip()[:300] or None)
             rating = int(cup_rating) if cup_rating in {"1", "2", "3", "4", "5"} else None
             await db.set_shot_cup_rating(conn, shot_id, rating)
+            await db.set_shot_grind_dose(conn, shot_id, grind.strip()[:20] or None, dose_g)
     finally:
         await conn.close()
     if not found:
