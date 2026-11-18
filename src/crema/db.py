@@ -12,6 +12,7 @@ Later phases add `pending_edits` (drafted profile changes awaiting approval) and
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -451,10 +452,17 @@ async def get_review(db: aiosqlite.Connection, review_id: int) -> Optional[dict[
     return _review_row(row) if row else None
 
 
+REVIEW_RETRY_SECONDS = 3 * 3600
+
+
 async def newest_shot_needs_review(db: aiosqlite.Connection) -> bool:
     """Retry stored shots without a successful review, including after ingest-only runs."""
     shots = await recent_shots(db, limit=1)
-    return bool(shots) and not await latest_reviews_for_shots(db, [shots[0]["id"]])
+    if not shots or await latest_reviews_for_shots(db, [shots[0]["id"]]):
+        return False
+    shot_id, _, failed_at = (await get_setting(db, "review_failed") or "").rpartition(":")
+    # shortcut: fixed 3h backoff after a failed review, make it configurable if needed.
+    return not (shot_id == shots[0]["id"] and failed_at.isdigit() and time.time() - int(failed_at) < REVIEW_RETRY_SECONDS)
 
 
 async def require_rated_review(db: aiosqlite.Connection, review_id: int) -> dict[str, Any]:

@@ -541,7 +541,11 @@ def discard(edit_id: int = typer.Argument(..., help="Edit id to discard.")) -> N
         cfg = _config()
         conn = await db.connect(cfg.db_path)
         try:
-            await discard_edit(conn, edit_id)
+            try:
+                await discard_edit(conn, edit_id)
+            except RuntimeError as e:
+                typer.echo(str(e), err=True)
+                raise typer.Exit(1)
             typer.echo(f"Discarded edit #{edit_id}.")
         finally:
             await conn.close()

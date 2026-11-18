@@ -571,6 +571,11 @@ def _render_edits(edits: list[dict[str, Any]]) -> str:
                 )
             elif e["status"] in {"failed", "unknown"}:
                 actions = f"<p class='c-off' style='margin:.5rem 0 0'>{html.escape(e['error'] or 'Push failed.')}</p>"
+                if e["status"] == "unknown":
+                    actions += (
+                        f"<form method='post' action='/edits/{e['id']}/discard' class='inline'>"
+                        "<button class='btn btn-sm btn-ghost' type='submit'>Discard</button></form>"
+                    )
             else:
                 actions = ""
         status_label = _EDIT_LABEL.get(e["status"], e["status"])

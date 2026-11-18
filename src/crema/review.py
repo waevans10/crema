@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 import aiosqlite
@@ -51,29 +52,34 @@ async def _review(
     # given after each shot and whether the next shot improved.
     prior_reviews = await db.latest_reviews_for_shots(conn, [s["id"] for s in shots[1:]])
 
-    client = AsyncAnthropic()
-    response = await client.messages.parse(
-        model=config.review_model,
-        # Generous budget: on models with adaptive thinking on by default
-        # (e.g. Sonnet 5) thinking tokens count against max_tokens, so a small
-        # cap stops the model mid-thought before the JSON is emitted.
-        max_tokens=8192,
-        system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-        messages=[{
-            "role": "user",
-            "content": build_user_message(
-                shots, grinder=grinder, coffee=coffee, prior_reviews=prior_reviews
-            ),
-        }],
-        output_format=ReviewResult,
-    )
-
-    result = response.parsed_output
-    if result is None:
-        # Safety refusal or unparseable output — surface it rather than storing junk.
-        raise RuntimeError(
-            f"Claude did not return a structured review (stop_reason={response.stop_reason})."
+    try:
+        client = AsyncAnthropic()
+        response = await client.messages.parse(
+            model=config.review_model,
+            # Generous budget: on models with adaptive thinking on by default
+            # (e.g. Sonnet 5) thinking tokens count against max_tokens, so a small
+            # cap stops the model mid-thought before the JSON is emitted.
+            max_tokens=8192,
+            system=[{"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+            messages=[{
+                "role": "user",
+                "content": build_user_message(
+                    shots, grinder=grinder, coffee=coffee, prior_reviews=prior_reviews
+                ),
+            }],
+            output_format=ReviewResult,
         )
+
+        result = response.parsed_output
+        if result is None:
+            # Safety refusal or unparseable output — surface it rather than storing junk.
+            raise RuntimeError(
+                f"Claude did not return a structured review (stop_reason={response.stop_reason})."
+            )
+    except Exception:
+        # Back off so the 15-minute timer doesn't re-bill a shot that keeps failing.
+        await db.set_setting(conn, "review_failed", f"{shots[0]['id']}:{int(time.time())}")
+        raise
 
     newest_shot_id = shots[0]["id"]
     suggestions = result.model_dump()
