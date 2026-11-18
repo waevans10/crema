@@ -76,30 +76,32 @@ async def _review(
             raise RuntimeError(
                 f"Claude did not return a structured review (stop_reason={response.stop_reason})."
             )
+
+        newest_shot_id = shots[0]["id"]
+        suggestions = result.model_dump()
+        # Claude still diagnoses and explains the shot, but the charted score is a
+        # repeatable execution measure rather than a variable model judgement.
+        recipe = await db.get_bean(conn, shots[0]["bean_id"]) if shots[0].get("bean_id") else None
+        execution = execution_score(shots[0]["transformed"], recipe=recipe)
+        suggestions["model_score"] = suggestions["score"]
+        suggestions["score"] = round(execution["score"])
+        suggestions["execution_score"] = execution
+        suggestions["score_reason"] = execution["reason"]
+        usage = getattr(response, "usage", None)
+        review_id = await db.insert_review(
+            conn,
+            newest_shot_id,
+            config.review_model,
+            suggestions,
+            input_tokens=getattr(usage, "input_tokens", None) if usage else None,
+            output_tokens=getattr(usage, "output_tokens", None) if usage else None,
+        )
     except Exception:
-        # Back off so the 15-minute timer doesn't re-bill a shot that keeps failing.
+        # Back off so the 15-minute timer doesn't re-bill a shot that keeps failing;
+        # covers everything until the review row is stored.
         await db.set_setting(conn, "review_failed", f"{shots[0]['id']}:{int(time.time())}")
         raise
 
-    newest_shot_id = shots[0]["id"]
-    suggestions = result.model_dump()
-    # Claude still diagnoses and explains the shot, but the charted score is a
-    # repeatable execution measure rather than a variable model judgement.
-    recipe = await db.get_bean(conn, shots[0]["bean_id"]) if shots[0].get("bean_id") else None
-    execution = execution_score(shots[0]["transformed"], recipe=recipe)
-    suggestions["model_score"] = suggestions["score"]
-    suggestions["score"] = round(execution["score"])
-    suggestions["execution_score"] = execution
-    suggestions["score_reason"] = execution["reason"]
-    usage = getattr(response, "usage", None)
-    review_id = await db.insert_review(
-        conn,
-        newest_shot_id,
-        config.review_model,
-        suggestions,
-        input_tokens=getattr(usage, "input_tokens", None) if usage else None,
-        output_tokens=getattr(usage, "output_tokens", None) if usage else None,
-    )
     stored = {
         "id": review_id,
         "shot_id": newest_shot_id,

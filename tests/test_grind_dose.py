@@ -219,3 +219,8 @@ async def test_prefill_ignores_out_of_range_bean_dose(conn):
     bean = await _bean(conn, dose=35)
     shot = await _shot(conn, '1', 100, bean)
     assert await db.grind_dose_prefill(conn, shot) == (None, None)
+
+
+def test_parse_dose_rejects_bare_unit(web):
+    with pytest.raises(ValueError):
+        web.parse_dose('g')

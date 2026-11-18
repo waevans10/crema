@@ -1867,9 +1867,9 @@ async def run_analyze(shot_id: str = Form(...)) -> RedirectResponse:
 
 def parse_dose(raw: str) -> Optional[float]:
     """Blank → None; grams 5–30 (comma decimals allowed); anything else is a typo."""
-    raw = raw.strip().lower().removesuffix("g").strip().replace(",", ".")
-    if not raw:
+    if not raw.strip():
         return None
+    raw = raw.strip().lower().removesuffix("g").strip().replace(",", ".")
     try:
         dose = float(raw)
     except ValueError:

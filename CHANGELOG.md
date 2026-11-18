@@ -19,7 +19,8 @@ All notable changes to crema are documented here. This project adheres to
 ### Fixed
 
 - A failed review now waits 3 hours before retrying the same shot instead of
-  re-calling Claude on every 15-minute timer run. Manual reviews (web button,
+  re-calling Claude on every 15-minute timer run, including failures after the
+  call but before the review is stored. Manual reviews (web button,
   `--force`) still retry immediately.
 - Pushes with an unknown outcome can be discarded (web and CLI) after checking the machine.
 - Community imports lowercase participant IDs to match the collector's storage keys.

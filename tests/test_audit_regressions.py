@@ -268,3 +268,16 @@ def test_participant_id_is_lowercased_on_import():
     bundle = {'schema_version': 2, 'participant_id': 'ABCDEF01-2345-6789-ABCD-EF0123456789',
               'machine': 'gaggimate', 'shots': [], 'reviews': [], 'experiments': []}
     assert validate_bundle(bundle).participant_id == 'abcdef01-2345-6789-abcd-ef0123456789'
+
+
+async def test_failure_after_claude_call_also_backs_off(conn):
+    from crema import review
+    await db.upsert_shot(conn, '1', {'duration_seconds': 25}, captured_at=100)
+    parsed = AsyncMock()
+    parsed.return_value.parsed_output.model_dump.return_value = {'score': 7}
+    with patch('crema.review.AsyncAnthropic') as client, \
+            patch('crema.review.execution_score', side_effect=KeyError('telemetry')):
+        client.return_value.messages.parse = parsed
+        with pytest.raises(KeyError):
+            await review.review_recent(conn, CremaConfig())
+    assert not await db.newest_shot_needs_review(conn)
