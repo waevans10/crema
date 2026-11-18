@@ -129,3 +129,70 @@ async def test_forms_render_prefilled_inputs(conn, web):
     assert "name='dose'" in baseline and "value='18.5'" in baseline
     notebook = web._render_shots([shot], {}, prefill)
     assert "name='grind'" in notebook and "value='18.5'" in notebook
+
+
+async def test_best_shot_picks_highest_then_newest(conn):
+    bean = await _bean(conn)
+    await _shot(conn, '1', 100, bean, rating=4)
+    await _shot(conn, '2', 200, bean, rating=5)
+    await _shot(conn, '3', 300, bean, rating=5)
+    await _shot(conn, '4', 400, bean, rating=3)
+    assert (await db.best_shot_for_bean(conn, bean))['id'] == '3'
+    weak = await _bean(conn)
+    await _shot(conn, '5', 500, weak, rating=3)
+    assert await db.best_shot_for_bean(conn, weak) is None
+
+
+async def test_pull_card_renders_parts_and_escapes(conn, web):
+    bean_id = await _bean(conn)
+    bean = await db.get_bean(conn, bean_id)
+    shot = await _shot(conn, '1', 100, bean_id, '<b>12', 18.0, 36.0, 5)
+    card = web._pull_card(bean, shot)
+    assert '&lt;b&gt;12' in card and '<b>12' not in card
+    assert '18 g in' in card and '36 g out' in card and '★★★★★' in card
+    assert 'recipe-from-shot' in card
+    bare = web._pull_card(bean, await _shot(conn, '2', 200, bean_id, rating=4))
+    assert 'Grind' not in bare and ' g in' not in bare and ' g out' not in bare and '★★★★' in bare
+    assert web._pull_card(bean, None) == ''
+
+
+async def test_pull_card_hides_save_when_recipe_matches(conn, web):
+    bean_id = await _bean(conn)
+    await db.set_bean_recipe(conn, bean_id, 18.0, 36.0, None, None)
+    shot = await _shot(conn, '1', 100, bean_id, '12', 18.0, 36.0, 5)
+    assert 'recipe-from-shot' not in web._pull_card(await db.get_bean(conn, bean_id), shot)
+
+
+async def test_recipe_from_shot_keeps_profile_and_style(conn, web):
+    bean_id = await _bean(conn)
+    await db.set_bean_recipe(conn, bean_id, 16.0, 40.0, 'p1', 'sweet')
+    await _shot(conn, '1', 100, bean_id, '12', 18.0, 36.0, 5)
+    response = await web.save_recipe_from_shot(bean_id, shot_id='1')
+    assert 'note=' in response.headers['location']
+    bean = await db.get_bean(conn, bean_id)
+    assert (bean['target_dose_g'], bean['target_yield_g']) == (18.0, 36.0)
+    assert (bean['target_profile_id'], bean['cup_style']) == ('p1', 'sweet')
+    other = await _bean(conn)
+    await _shot(conn, '2', 200, other, '9', 20.0, 40.0, 5)
+    response = await web.save_recipe_from_shot(bean_id, shot_id='2')
+    assert 'error=' in response.headers['location']
+    assert (await db.get_bean(conn, bean_id))['target_dose_g'] == 18.0
+
+
+async def test_recipe_from_shot_without_dose_keeps_bean_dose(conn, web):
+    bean_id = await _bean(conn)
+    await db.set_bean_recipe(conn, bean_id, 18.0, 40.0, None, None)
+    shot = await _shot(conn, '1', 100, bean_id, '12', None, 36.0, 5)
+    assert 'recipe-from-shot' in web._pull_card(await db.get_bean(conn, bean_id), shot)
+    await web.save_recipe_from_shot(bean_id, shot_id='1')
+    bean = await db.get_bean(conn, bean_id)
+    assert (bean['target_dose_g'], bean['target_yield_g']) == (18.0, 36.0)
+    assert 'recipe-from-shot' not in web._pull_card(bean, shot)
+
+
+async def test_notebook_summary_shows_recorded_grind_and_dose(conn, web):
+    bean_id = await _bean(conn)
+    shot = await _shot(conn, '1', 100, bean_id, '12', 18.0, 36.0, 5)
+    assert 'grind 12 · 18 g in' in web._render_shots([shot], {})
+    unrecorded = await _shot(conn, '2', 200, bean_id)
+    assert 'grind' not in web._render_shots([unrecorded], {}).split('<details class="sub"><summary>')[1].split('</summary>')[0]

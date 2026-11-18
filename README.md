@@ -100,6 +100,11 @@ profile edit — only to pull new shots or push an approved edit back.
   beans, and the next review reconciles your palate with the curves. Reviews
   also see their own earlier advice alongside the shots that followed, so they
   build on what worked instead of repeating what didn't.
+- **Grind & dose memory** — record your grinder setting and dose beside each
+  cup rating (prefilled from your last shot on that bean, so an unchanged
+  recipe is one tap). Reviews see what you actually ground and dosed, and the
+  Now page shows **your best shot on the current bean** — grind · dose in →
+  yield out — with one tap to save it as the bean's recipe.
 - **Community shot pool (opt-in)** — say yes once (at setup, in the web UI, or
   `crema autoshare on`) and crema shares your anonymized shot data after each
   review, growing the open dataset. See

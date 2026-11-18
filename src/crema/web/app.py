@@ -196,7 +196,7 @@ h2{font-size:.82rem;text-transform:uppercase;letter-spacing:.08em;color:var(--mu
 select{font:inherit;color:var(--text);background:var(--surface-2);
   border:1px solid var(--border);border-radius:8px;padding:.35rem .5rem}
 label.gd{display:inline-flex;align-items:center;gap:.35rem;font-size:.82rem;margin:.4rem .6rem 0 0}
-label.gd input{font:inherit;width:5.5rem;color:var(--text);background:var(--surface-2);
+label.gd input{font:inherit;font-size:16px;width:5.5rem;color:var(--text);background:var(--surface-2);
   border:1px solid var(--border);border-radius:8px;padding:.35rem .5rem}
 ul.changes{margin:.3rem 0;padding-left:1.1rem}
 ul.changes li{margin:.25rem 0}
@@ -776,6 +776,10 @@ def _render_shots(
             summary_bits.append(f"Tasting notes: {html.escape(notes)}")
         if cup_rating:
             summary_bits.append(f"Cup rating: {cup_rating}/5")
+        if sh.get("grind_setting"):
+            summary_bits.append(f"grind {html.escape(sh['grind_setting'])}")
+        if sh.get("dose_g"):
+            summary_bits.append(f"{sh['dose_g']:g} g in")
         summary = " · ".join(summary_bits) or "Add beans / tasting notes for this shot"
         hint = _taste_hint(sh, (reviews_by_shot or {}).get(sh["id"]))
         hint_html = (
@@ -1086,6 +1090,35 @@ def _learning_lesson(shot: Optional[dict[str, Any]]) -> str:
       <p class="muted" style="font-size:.82rem;margin:.25rem 0">{html.escape(taste_line)}</p>
       <details class="sub"><summary>Underlying signals</summary><p class="muted" style="margin:.3rem 0 0">{html.escape(raw)}</p></details>
     </div>"""
+
+
+def _pull_card(bean: dict[str, Any], shot: Optional[dict[str, Any]]) -> str:
+    """The best-rated shot on this bean, as the recipe to pull again."""
+    if not shot:
+        return ""
+    dose, out = shot.get("dose_g"), shot["transformed"].get("final_weight_g")
+    parts = [f"Grind <b>{html.escape(shot['grind_setting'])}</b>"] if shot.get("grind_setting") else []
+    if dose and out:
+        parts.append(f"{dose:g} g in → {out:g} g out")
+    elif dose:
+        parts.append(f"{dose:g} g in")
+    elif out:
+        parts.append(f"{out:g} g out")
+    rating = int(shot["cup_rating"])
+    parts.append(f"<span class='stars' role='img' aria-label='rated {rating} of 5'>{'★' * rating}{'☆' * (5 - rating)}</span>")
+    save = ""
+    # A missing value keeps the bean's existing target rather than erasing it.
+    if (dose or out) and (dose or bean.get("target_dose_g"), out or bean.get("target_yield_g")) != (bean.get("target_dose_g"), bean.get("target_yield_g")):
+        save = (
+            f"<form method='post' action='/beans/{int(bean['id'])}/recipe-from-shot' class='inline'>"
+            f"<input type='hidden' name='shot_id' value='{html.escape(shot['id'])}'>"
+            "<button class='btn btn-sm btn-ghost' type='submit'>Save as this bean's recipe</button></form>"
+        )
+    return (
+        f"<div class='card pull'><span class='muted'>Your best on {html.escape(bean['name'])}</span>"
+        f"<p class='lead' style='margin:.3rem 0'>{' · '.join(parts)}</p>"
+        f"<div class='row'><span class='muted' style='font-size:.82rem'>pulled {html.escape(_fmt_shot_time(shot))}</span>{save}</div></div>"
+    )
 
 
 def _grind_dose_inputs(grind: Optional[str], dose: Optional[float]) -> str:
@@ -1467,6 +1500,7 @@ async def index(view: str = "now", error: Optional[str] = None, note: Optional[s
         experiment = await db.active_experiment(conn)
         reviews_by_shot = await db.latest_reviews_for_shots(conn, [s["id"] for s in shots])
         prefill = {s["id"]: await db.grind_dose_prefill(conn, s) for s in shots}
+        best_shot = await db.best_shot_for_bean(conn, active_bean["id"]) if active_bean else None
     finally:
         await conn.close()
     view = view if view in {"now", "learn", "history", "setup"} else "now"
@@ -1515,6 +1549,7 @@ async def index(view: str = "now", error: Optional[str] = None, note: Optional[s
         content = f"""
           {_aging_banner(active_bean)}
           <h2>Now</h2>
+          {_pull_card(active_bean, best_shot) if active_bean else ''}
           <div class="card"><span class="lead">{html.escape(active_bean['name']) if active_bean else 'No active bean'}</span>
             <span class="muted"> · {html.escape(str(current_shot['id']) if current_shot else 'pull a shot to begin')}</span></div>
           {_workflow_prompt(current_shot, active_bean, experiment, prefill)}
@@ -1660,6 +1695,25 @@ async def save_recipe(
     if not saved:
         return RedirectResponse("/?error=" + quote("Bean not found."), status_code=303)
     return RedirectResponse("/?note=" + quote("Recipe targets saved — future reviews of this bean score against them.") + "#recipe", status_code=303)
+
+
+@app.post("/beans/{bean_id}/recipe-from-shot")
+async def save_recipe_from_shot(bean_id: int, shot_id: str = Form(...)) -> RedirectResponse:
+    """Copy a liked shot's dose and yield into the bean's recipe; keep its profile and cup style."""
+    conn = await db.connect(_cfg.db_path)
+    try:
+        bean = await db.get_bean(conn, bean_id)
+        shot = await db.get_shot(conn, shot_id)
+        if not bean or not shot or shot["bean_id"] != bean_id:
+            return RedirectResponse("/?error=" + quote("Recipe not saved — that shot was pulled with a different bean."), status_code=303)
+        await db.set_bean_recipe(
+            conn, bean_id, shot["dose_g"] or bean["target_dose_g"],
+            shot["transformed"].get("final_weight_g") or bean["target_yield_g"],
+            bean["target_profile_id"], bean["cup_style"],
+        )
+    finally:
+        await conn.close()
+    return RedirectResponse("/?note=" + quote(f"Recipe saved for {bean['name']} — future shots of this bean score against it.") + "#recipe", status_code=303)
 
 
 def _experiment_input(variable: str, direction: str, magnitude: str, unit: str, note: str) -> tuple[str, str, Optional[float], str, str]:
@@ -1821,7 +1875,7 @@ def parse_dose(raw: str) -> Optional[float]:
     except ValueError:
         dose = 0.0
     if not 5 <= dose <= 30:  # also rejects nan/inf
-        raise ValueError("Dose must be a number of grams between 5 and 30.")
+        raise ValueError("Nothing saved — dose must be grams between 5 and 30, like 18 or 18.5.")
     return dose
 
 

@@ -387,6 +387,18 @@ async def set_shot_cup_rating(db: aiosqlite.Connection, shot_id: str, rating: Op
     return bool(cur.rowcount)
 
 
+async def best_shot_for_bean(db: aiosqlite.Connection, bean_id: int) -> Optional[dict[str, Any]]:
+    """The highest-rated (4–5) shot on a bean, newest first among ties — the recipe to repeat."""
+    async with db.execute(
+        "SELECT id, captured_at, transformed, tasting_notes, cup_rating, coffee, bean_id, grind_setting, dose_g "
+        "FROM shots WHERE bean_id = ? AND cup_rating >= 4 "
+        "ORDER BY cup_rating DESC, COALESCE(captured_at, created_at) DESC, rowid DESC LIMIT 1",
+        (bean_id,),
+    ) as cur:
+        row = await cur.fetchone()
+    return _shot_row(row) if row else None
+
+
 async def grind_dose_prefill(
     db: aiosqlite.Connection, shot: dict[str, Any]
 ) -> tuple[Optional[str], Optional[float]]:
