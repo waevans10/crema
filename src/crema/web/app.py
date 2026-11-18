@@ -1611,7 +1611,7 @@ async def run_review() -> RedirectResponse:
     conn = await db.connect(_cfg.db_path)
     try:
         await ingest_new_shots(conn, _cfg)
-        if not await db.newest_shot_needs_review(conn):
+        if not await db.newest_shot_needs_review(conn, honor_backoff=False):
             return RedirectResponse(
                 "/?note=" + quote("No new shots since the last review — nothing to review."),
                 status_code=303,
@@ -1867,7 +1867,7 @@ async def run_analyze(shot_id: str = Form(...)) -> RedirectResponse:
 
 def parse_dose(raw: str) -> Optional[float]:
     """Blank → None; grams 5–30 (comma decimals allowed); anything else is a typo."""
-    raw = raw.strip().replace(",", ".")
+    raw = raw.strip().lower().removesuffix("g").strip().replace(",", ".")
     if not raw:
         return None
     try:

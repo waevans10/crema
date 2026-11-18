@@ -424,7 +424,8 @@ async def grind_dose_prefill(
             dose = row[0]
     if dose is None:
         bean = await get_bean(db, shot["bean_id"])
-        dose = bean["target_dose_g"] if bean else None
+        target = bean["target_dose_g"] if bean else None
+        dose = target if target is not None and 5 <= target <= 30 else None  # must pass parse_dose
     return grind, dose
 
 
@@ -513,11 +514,13 @@ async def get_review(db: aiosqlite.Connection, review_id: int) -> Optional[dict[
 REVIEW_RETRY_SECONDS = 3 * 3600
 
 
-async def newest_shot_needs_review(db: aiosqlite.Connection) -> bool:
+async def newest_shot_needs_review(db: aiosqlite.Connection, honor_backoff: bool = True) -> bool:
     """Retry stored shots without a successful review, including after ingest-only runs."""
     shots = await recent_shots(db, limit=1)
     if not shots or await latest_reviews_for_shots(db, [shots[0]["id"]]):
         return False
+    if not honor_backoff:  # a person asking again (e.g. after fixing the API key) always retries
+        return True
     shot_id, _, failed_at = (await get_setting(db, "review_failed") or "").rpartition(":")
     # shortcut: fixed 3h backoff after a failed review, make it configurable if needed.
     return not (shot_id == shots[0]["id"] and failed_at.isdigit() and time.time() - int(failed_at) < REVIEW_RETRY_SECONDS)

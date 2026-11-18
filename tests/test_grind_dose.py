@@ -196,3 +196,26 @@ async def test_notebook_summary_shows_recorded_grind_and_dose(conn, web):
     assert 'grind 12 · 18 g in' in web._render_shots([shot], {})
     unrecorded = await _shot(conn, '2', 200, bean_id)
     assert 'grind' not in web._render_shots([unrecorded], {}).split('<details class="sub"><summary>')[1].split('</summary>')[0]
+
+
+async def test_manual_web_review_ignores_failure_backoff(conn, web, monkeypatch):
+    from unittest.mock import AsyncMock
+    await db.upsert_shot(conn, '1', {}, captured_at=100)
+    await db.set_setting(conn, 'review_failed', f"1:{int(__import__('time').time())}")
+    assert not await db.newest_shot_needs_review(conn)  # the timer still backs off
+    monkeypatch.setattr(web, 'ingest_new_shots', AsyncMock(return_value=[]))
+    review = AsyncMock(return_value=None)
+    monkeypatch.setattr(web, 'review_recent', review)
+    await web.run_review()
+    assert review.await_count == 1
+
+
+def test_parse_dose_accepts_gram_suffix(web):
+    assert web.parse_dose('18g') == 18
+    assert web.parse_dose('18.5 G') == 18.5
+
+
+async def test_prefill_ignores_out_of_range_bean_dose(conn):
+    bean = await _bean(conn, dose=35)
+    shot = await _shot(conn, '1', 100, bean)
+    assert await db.grind_dose_prefill(conn, shot) == (None, None)
