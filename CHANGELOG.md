@@ -3,6 +3,33 @@
 All notable changes to crema are documented here. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## [1.3.0] — 2026-11-17
+
+### Grind & dose memory
+
+### Added
+
+- Grind setting and dose recorded per shot beside the cup rating, prefilled from the
+  latest earlier shot on the same bean (or the bean's target dose).
+- "Your best on <bean>" card on Now: the highest-rated shot as grind · dose in →
+  yield out, with one tap to save it as the bean's recipe.
+- Reviews include the recorded grind and dose for each shot.
+- Shot notebook summaries show recorded grind and dose.
+
+### Fixed
+
+- A failed review now waits 3 hours before retrying the same shot instead of
+  re-calling Claude on every 15-minute timer run. Manual reviews (web button,
+  `--force`) still retry immediately.
+- Pushes with an unknown outcome can be discarded (web and CLI) after checking the machine.
+- Community imports lowercase participant IDs to match the collector's storage keys.
+- `crema discard` on a non-draft prints a clear error instead of a traceback.
+
+### Upgrade notes
+
+- Back up your SQLite database, run `uv sync --frozen`, and restart the Crema
+  service. Two nullable shot columns are added automatically.
+
 ## [1.2.0] — 2026-11-17
 
 ### Dial-in workflow and reliability
