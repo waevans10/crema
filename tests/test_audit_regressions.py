@@ -2,7 +2,7 @@
 import asyncio
 import json
 import sqlite3
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -273,8 +273,9 @@ def test_participant_id_is_lowercased_on_import():
 async def test_failure_after_claude_call_also_backs_off(conn):
     from crema import review
     await db.upsert_shot(conn, '1', {'duration_seconds': 25}, captured_at=100)
-    parsed = AsyncMock()
-    parsed.return_value.parsed_output.model_dump.return_value = {'score': 7}
+    response = MagicMock()
+    response.parsed_output.model_dump.return_value = {'score': 7}
+    parsed = AsyncMock(return_value=response)
     with patch('crema.review.AsyncAnthropic') as client, \
             patch('crema.review.execution_score', side_effect=KeyError('telemetry')):
         client.return_value.messages.parse = parsed
